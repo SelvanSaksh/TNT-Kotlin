@@ -5,6 +5,7 @@ import android.app.Activity
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.util.Log
 import android.view.ViewGroup
 import android.widget.FrameLayout
 import android.widget.Toast
@@ -106,15 +107,15 @@ class ScannerActivity : ComponentActivity() {
             containerLayout?.addView(viewToAdd)
         }
         
-        scannerController = ScannerController(
-            singleScannerView = singleScannerView,
-            multiScannerView = null,
-            authScannerView = null,
-            lifecycleOwner = this,
-            onScanned = { scannedData ->
-                returnResult(scannedData)
-            }
-        )
+//        scannerController = ScannerController(
+//            singleScannerView = singleScannerView,
+//            multiScannerView = null,
+//            authScannerView = null,
+//            lifecycleOwner = this,
+//            onScanned = { scannedData ->
+//                returnResult(scannedData)
+//            }
+//        )
         
         scannerController?.startSingleScanner(this)
     }
@@ -128,15 +129,15 @@ class ScannerActivity : ComponentActivity() {
             containerLayout?.addView(viewToAdd)
         }
         
-        scannerController = ScannerController(
-            singleScannerView = null,
-            multiScannerView = null,
-            authScannerView = authScannerView,
-            lifecycleOwner = this,
-            onScanned = { scannedData ->
-                returnResult(scannedData)
-            }
-        )
+//        scannerController = ScannerController(
+//            singleScannerView = null,
+//            multiScannerView = null,
+//            authScannerView = authScannerView,
+//            lifecycleOwner = this,
+//            onScanned = { scannedData ->
+//                returnResult(scannedData)
+//            }
+//        )
         
         scannerController?.startAuthScanner(this)
     }
@@ -150,15 +151,15 @@ class ScannerActivity : ComponentActivity() {
             containerLayout?.addView(viewToAdd)
         }
         
-        scannerController = ScannerController(
-            singleScannerView = null,
-            multiScannerView = multiScannerView,
-            authScannerView = null,
-            lifecycleOwner = this,
-            onScanned = { scannedData ->
-                returnResult(scannedData)
-            }
-        )
+//        scannerController = ScannerController(
+//            singleScannerView = null,
+//            multiScannerView = multiScannerView,
+//            authScannerView = null,
+//            lifecycleOwner = this,
+//            onScanned = { scannedData ->
+//                returnResult(scannedData)
+//            }
+//        )
         
         scannerController?.startMultiScanner(this)
     }

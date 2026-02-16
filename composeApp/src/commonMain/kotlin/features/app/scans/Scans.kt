@@ -33,7 +33,20 @@ fun Scans(
     
     Box(modifier = Modifier.fillMaxSize()) {
         // Camera view
-        ScannerView(
+        key(currentScanMode) {
+            ScannerView(
+                scanMode = currentScanMode,
+                onScanResult = { result ->
+                    scannedResult = result
+                    if (currentScanMode != "MULTI") {
+                        showResult = true
+                    }
+                },
+                onNavigate = onNavigate
+            )
+        }
+
+        /*ScannerView(
             scanMode = currentScanMode,
             onScanResult = { result ->
                 scannedResult = result
@@ -43,7 +56,7 @@ fun Scans(
                 }
             },
             onNavigate = onNavigate
-        )
+        )*/
         
         // Result overlay (shows on top of camera)
         if (showResult && scannedResult != null) {

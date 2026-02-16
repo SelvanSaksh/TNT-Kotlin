@@ -34,7 +34,7 @@ fun App() {
     var isLoading by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
-    
+
     val sessionManager = remember { SessionManager(getLocalStorage()) }
     val json = remember { Json { ignoreUnknownKeys = true } }
 
@@ -46,7 +46,8 @@ fun App() {
             val userDetailJson = sessionManager.getUserDetail()
             if (userDetailJson != null) {
                 try {
-                    val userDetail = json.decodeFromString<network.models.UserDetail>(userDetailJson)
+                    val userDetail =
+                        json.decodeFromString<network.models.UserDetail>(userDetailJson)
                     currentScreen = AppScreen.Home
                 } catch (e: Exception) {
                     currentScreen = AppScreen.Home
@@ -68,19 +69,19 @@ fun App() {
         ) {
             when (currentScreen) {
 
-    AppScreen.Initial -> {
-        InitialScreen()
-    }
+                AppScreen.Initial -> {
+                    InitialScreen()
+                }
 
-    AppScreen.Login -> {
-        LoginScreen(
-            onNavigateToOtp = { identifier, otpResponse ->
-                userIdentifier = identifier
-                autoOtp = if (otpResponse.isAutoGen) otpResponse.otp else null
-                currentScreen = AppScreen.Otp
-            }
-        )
-    }
+                AppScreen.Login -> {
+                    LoginScreen(
+                        onNavigateToOtp = { identifier, otpResponse ->
+                            userIdentifier = identifier
+                            autoOtp = if (otpResponse.isAutoGen) otpResponse.otp else null
+                            currentScreen = AppScreen.Otp
+                        }
+                    )
+                }
 
                 AppScreen.Otp -> {
                     OtpScreen(
@@ -130,31 +131,32 @@ fun App() {
 
 
                 AppScreen.Home -> {
-        features.app.Home(
-            onNavigate = { screen ->
-                currentScreen = screen
-            }
-        )
-    }
+                    features.app.Home(
+                        onNavigate = { screen ->
+                            currentScreen = screen
+                        }
+                    )
+                }
 
-    AppScreen.GenerateCodeScreen -> {
-        GenerateCodeScreen(
-            onBack = {
-                currentScreen = AppScreen.Home
-            },
-            onNavigate = { screen ->
-                currentScreen = screen
-            }
-        )
-    }
+                AppScreen.GenerateCodeScreen -> {
+                    GenerateCodeScreen(
+                        onBack = {
+                            currentScreen = AppScreen.Home
+                        },
+                        onNavigate = { screen ->
+                            currentScreen = screen
+                        }
+                    )
+                }
 
-               AppScreen.GS12DBarcode -> {
-                GS12DBarcode(
-                    onBack = {
-                        currentScreen = AppScreen.GenerateCodeScreen
-                    }
-                )
-               }
+                AppScreen.GS12DBarcode -> {
+                    GS12DBarcode(
+                        onBack = {
+                            currentScreen = AppScreen.GenerateCodeScreen
+                        }
+                    )
+                }
+
                 AppScreen.Assets -> {
                     features.app.assets.Assets(
                         onNavigate = { screen ->
@@ -162,6 +164,7 @@ fun App() {
                         }
                     )
                 }
+
                 AppScreen.Scans -> {
                     features.app.scans.Scans(
                         onNavigate = { screen ->
@@ -169,8 +172,8 @@ fun App() {
                         }
                     )
                 }
-}
-            
+            }
+
             SnackbarHost(
                 hostState = snackbarHostState,
                 modifier = Modifier.align(Alignment.BottomCenter)
