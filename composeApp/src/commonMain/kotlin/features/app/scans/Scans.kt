@@ -33,17 +33,64 @@ fun Scans(
     
     Box(modifier = Modifier.fillMaxSize()) {
         // Camera view
-        key(currentScanMode) {
-            ScannerView(
-                scanMode = currentScanMode,
-                onScanResult = { result ->
-                    scannedResult = result
-                    if (currentScanMode != "MULTI") {
-                        showResult = true
+        Column(
+            modifier = Modifier.fillMaxSize()
+        ) {
+            Box(
+                modifier = Modifier.weight(1f)
+            ) {
+                key(currentScanMode) {
+                    ScannerView(
+                        scanMode = currentScanMode,
+                        onScanResult = { result ->
+                            scannedResult = result
+                            if (currentScanMode != "MULTI") {
+                                showResult = true
+                            }
+                        },
+                        onNavigate = onNavigate
+                    )
+                }
+            }
+            // Bottom mode switcher buttons
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+//                    .align(Alignment.BottomCenter)
+                    .background(Color.Black.copy(alpha = 0.8f))
+                    .padding(16.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly
+            ) {
+                ModeButton(
+                    title = "Single",
+                    icon = Icons.Default.QrCode2,
+                    isSelected = currentScanMode == "SINGLE",
+                    onClick = {
+                        currentScanMode = "SINGLE"
+                        showResult = false
                     }
-                },
-                onNavigate = onNavigate
-            )
+                )
+
+                ModeButton(
+                    title = "Auth",
+                    icon = Icons.Default.VerifiedUser,
+                    isSelected = currentScanMode == "AUTH",
+                    onClick = {
+                        currentScanMode = "AUTH"
+                        showResult = false
+                    }
+                )
+
+                ModeButton(
+                    title = "Multi",
+                    icon = Icons.Default.QrCode,
+                    isSelected = currentScanMode == "MULTI",
+                    onClick = {
+                        currentScanMode = "MULTI"
+                        showResult = false
+                    }
+                )
+            }
         }
 
         /*ScannerView(
@@ -124,46 +171,6 @@ fun Scans(
                     }
                 }
             }
-        }
-        
-        // Bottom mode switcher buttons
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .align(Alignment.BottomCenter)
-                .background(Color.Black.copy(alpha = 0.8f))
-                .padding(16.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly
-        ) {
-            ModeButton(
-                title = "Single",
-                icon = Icons.Default.QrCode2,
-                isSelected = currentScanMode == "SINGLE",
-                onClick = {
-                    currentScanMode = "SINGLE"
-                    showResult = false
-                }
-            )
-            
-            ModeButton(
-                title = "Auth",
-                icon = Icons.Default.VerifiedUser,
-                isSelected = currentScanMode == "AUTH",
-                onClick = {
-                    currentScanMode = "AUTH"
-                    showResult = false
-                }
-            )
-            
-            ModeButton(
-                title = "Multi",
-                icon = Icons.Default.QrCode,
-                isSelected = currentScanMode == "MULTI",
-                onClick = {
-                    currentScanMode = "MULTI"
-                    showResult = false
-                }
-            )
         }
         
         // Back button

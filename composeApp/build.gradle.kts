@@ -37,7 +37,7 @@ kotlin {
             implementation(libs.androidx.activity.compose)
             
             // Team's Scanner SDK
-            implementation("com.github.Gowthamgsv32:scanner-sdk:1.6.0")
+            implementation("com.github.Gowthamgsv32:scanner-sdk:1.8.0")
             implementation("androidx.constraintlayout:constraintlayout:2.2.1")
             implementation("androidx.fragment:fragment-ktx:1.8.9")
             implementation("com.google.android.material:material:1.13.0")
