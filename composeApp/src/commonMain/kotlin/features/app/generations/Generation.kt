@@ -8,13 +8,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
-import androidx.compose.material.icons.filled.QrCode
-import androidx.compose.material.icons.filled.Link
-import androidx.compose.material.icons.filled.Web
-import androidx.compose.material.icons.filled.Code
-import androidx.compose.material.icons.filled.Numbers
-import androidx.compose.material.icons.filled.ToggleOn
-import androidx.compose.material.icons.filled.MoreHoriz
+import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -30,11 +24,13 @@ import navigation.AppScreen
 @Composable
 fun GenerateCodeScreen(
     onBack: () -> Unit,
-    onNavigate: (AppScreen) -> Unit
+    onNavigate: (AppScreen) -> Unit,
+    onNavigateBarcode: (DynamicBarcodeType) -> Unit
 ) {
     var selectedTab by remember { mutableStateOf(0) }
 
     val tabs = listOf("GS1 Code", "2D Code", "1D / Others")
+    val primaryColor = Color(0xFF163C66)
 
     Column(
         modifier = Modifier
@@ -43,6 +39,7 @@ fun GenerateCodeScreen(
     ) {
         Spacer(modifier = Modifier.height(25.dp))
 
+        // Top Bar
         Row(
             modifier = Modifier
                 .fillMaxWidth()
@@ -56,71 +53,73 @@ fun GenerateCodeScreen(
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                     contentDescription = "Back",
-                    tint = Color.Black
+                    tint = primaryColor
                 )
             }
-            
+
             Spacer(modifier = Modifier.width(16.dp))
-            
+
             Text(
                 text = "Generate Code",
                 fontSize = 22.sp,
                 fontWeight = FontWeight.Bold,
-                color = Color.Black
+                color = primaryColor
             )
         }
 
-       Column(
-    modifier = Modifier
-        .fillMaxWidth()
-        .padding(horizontal = 16.dp, vertical = 8.dp)
-        .background(Color(0xFFF5F5F5), RoundedCornerShape(10.dp))
-        .padding(4.dp)
-) {
-    Row(
-    modifier = Modifier
-        .fillMaxWidth()
-        .height(44.dp)     
-        .background(Color(0xFFF5F5F5), RoundedCornerShape(12.dp))
-        .padding(4.dp),
-    horizontalArrangement = Arrangement.spacedBy(4.dp),
-    verticalAlignment = Alignment.CenterVertically
-) {
-    tabs.forEachIndexed { index, title ->
-        val isSelected = selectedTab == index
-
-        Box(
+        // Tab Bar - Clean White Theme with Primary Color
+        Column(
             modifier = Modifier
-                .weight(1f)
-                .fillMaxHeight() 
-                .clip(RoundedCornerShape(10.dp))
-                .background(
-                    if (isSelected) Color.Black else Color.Transparent
-                )
-                .clickable { selectedTab = index },
-            contentAlignment = Alignment.Center
+                .fillMaxWidth()
+                .padding(horizontal = 16.dp, vertical = 8.dp)
+                .background(Color(0xFFF8F9FA), RoundedCornerShape(12.dp))
+                .padding(4.dp)
         ) {
-            Text(
-                text = title,
-                color = if (isSelected) Color.White else Color.Black,
-                fontSize = 14.sp,
-                fontWeight = FontWeight.SemiBold,
-                maxLines = 1
-            )
-        }
-    }
-}
-}
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(48.dp)
+                    .background(Color(0xFFF8F9FA), RoundedCornerShape(12.dp))
+                    .padding(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                tabs.forEachIndexed { index, title ->
+                    val isSelected = selectedTab == index
 
-        
-        Spacer(modifier = Modifier.height(16.dp))
+                    Box(
+                        modifier = Modifier
+                            .weight(1f)
+                            .fillMaxHeight()
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(
+                                if (isSelected) primaryColor else Color.Transparent
+                            )
+                            .clickable { selectedTab = index },
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Text(
+                            text = title,
+                            color = if (isSelected) Color.White else primaryColor,
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            maxLines = 1
+                        )
+                    }
+                }
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        // Content Area
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .background(Color.White)
                 .padding(horizontal = 16.dp)
         ) {
-            when (selectedTab) {
+            val options = when (selectedTab) {
                 0 -> listOf(
                     Pair("GS1 2D Barcode", Icons.Default.QrCode),
                     Pair("GS1 Digital Link", Icons.Default.Link),
@@ -138,17 +137,47 @@ fun GenerateCodeScreen(
                     Pair("DataBar", Icons.Default.ToggleOn),
                     Pair("Others", Icons.Default.MoreHoriz)
                 )
-            }.forEach { (option, icon) ->
+            }
+
+            options.forEach { (option, icon) ->
                 OptionCard(
                     title = option,
                     icon = icon,
+                    primaryColor = primaryColor,
                     onClick = {
-                        if (option == "GS1 2D Barcode") {
-                            onNavigate(AppScreen.GS12DBarcode)
+
+                        when (option) {
+
+                            "GS1 2D Barcode" -> {
+                                onNavigate(AppScreen.GS12DBarcode)
+                            }
+
+                            "GS1 Digital Link" -> {
+                                onNavigate(AppScreen.GS1DigitalBarcodeScreen)
+                            }
+
+                            "Multi URL" -> {
+                                onNavigate(AppScreen.MultiLinkBarcodeScreen)
+                            }
+
+                            else -> {
+
+                                val type = when (option) {
+                                    "Code 128" -> DynamicBarcodeType.CODE_128
+                                    "EAN-13" -> DynamicBarcodeType.EAN_13
+                                    "EAN-8" -> DynamicBarcodeType.EAN_8
+                                    "UPC-A" -> DynamicBarcodeType.UPC_A
+                                    "QR Code" -> DynamicBarcodeType.QR_CODE
+                                    "Aztec Code" -> DynamicBarcodeType.AZTEC
+                                    else -> DynamicBarcodeType.CODE_128
+                                }
+
+                                onNavigateBarcode(type)
+                            }
                         }
                     }
                 )
-                Spacer(modifier = Modifier.height(8.dp))
+                Spacer(modifier = Modifier.height(12.dp))
             }
         }
     }
@@ -158,6 +187,7 @@ fun GenerateCodeScreen(
 fun OptionCard(
     title: String,
     icon: ImageVector,
+    primaryColor: Color,
     onClick: () -> Unit
 ) {
     Card(
@@ -165,12 +195,8 @@ fun OptionCard(
             .fillMaxWidth()
             .clickable(onClick = onClick),
         shape = RoundedCornerShape(12.dp),
-        colors = CardDefaults.cardColors(
-            containerColor = Color.White
-        ),
-        elevation = CardDefaults.cardElevation(
-            defaultElevation = 1.dp
-        )
+        colors = CardDefaults.cardColors(containerColor = Color.White),
+        elevation = CardDefaults.cardElevation(defaultElevation = 1.dp)
     ) {
         Box(
             modifier = Modifier
@@ -183,36 +209,37 @@ fun OptionCard(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceBetween
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    // Icon Container
                     Box(
                         modifier = Modifier
-                            .size(40.dp)
-                            .clip(RoundedCornerShape(8.dp))
-                            .background(Color(0xFFF5F5F5)),
+                            .size(44.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(primaryColor.copy(alpha = 0.1f)),
                         contentAlignment = Alignment.Center
                     ) {
                         Icon(
                             imageVector = icon,
                             contentDescription = title,
-                            tint = Color.Black,
-                            modifier = Modifier.size(20.dp)
+                            tint = primaryColor,
+                            modifier = Modifier.size(22.dp)
                         )
                     }
+
                     Spacer(modifier = Modifier.width(16.dp))
+
                     Text(
                         text = title,
-                        color = Color.Black,
+                        color = primaryColor,
                         fontSize = 16.sp,
                         fontWeight = FontWeight.Medium
                     )
                 }
-                
+                // Arrow
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowForward,
                     contentDescription = "Navigate",
-                    tint = Color(0xFF666666),
+                    tint = primaryColor,
                     modifier = Modifier.size(20.dp)
                 )
             }

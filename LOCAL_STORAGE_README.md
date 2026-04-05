@@ -32,6 +32,7 @@ sessionManager.saveSession(
     userEmail = response.userEmail,
     userDetail = userDetailJson // JSON string of UserDetail object
 )
+sessionManager.saveCompanyId(response.companyId)
 ```
 
 ### Retrieving Stored Data

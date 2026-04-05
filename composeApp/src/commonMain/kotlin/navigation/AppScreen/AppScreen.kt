@@ -5,8 +5,17 @@ enum class AppScreen {
     Login,
     Otp,
     Home,
+    History,
+    Scan,
+    Upgrade,
+    Profile,
     GenerateCodeScreen,
     GS12DBarcode,
     Assets,
     Scans,
+    GS1DigitalBarcodeScreen,
+    MultiLinkBarcodeScreen,
+
+    CommonBarcodeScreen,
+
 }

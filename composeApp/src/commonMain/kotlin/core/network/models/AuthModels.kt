@@ -19,6 +19,7 @@ data class SendOtpResponse(
 
 @Serializable
 data class VerifyOtpRequest(
+    val email: String,
     val otp: String
 )
 
@@ -52,7 +53,7 @@ data class UserDetail(
     val status: Int,
 
     @SerialName("access_modules")
-    val accessModules: List<Module> = emptyList(),
+    val accessModules: List<Module>? = emptyList(),
 
     val locations: List<Location> = emptyList()
 )

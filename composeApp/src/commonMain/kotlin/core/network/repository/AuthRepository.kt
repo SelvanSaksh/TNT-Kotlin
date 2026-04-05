@@ -28,13 +28,14 @@ object AuthRepository {
 
         return try {
 
-            println("Sending OTP verification request...")
-            println("OTP: $otp")
-            println("Identifier: $identifier")
+            println("OTP_LOG: Sending OTP verification request...")
+            println("OTP_LOG: OTP: $otp")
+            println("OTP_LOG: Identifier: $identifier")
 
             val response = ApiClient.post<VerifyOtpRequest, VerifyOtpResponse>(
                 endpoint = "/auth/otp-verification",
                 payload = VerifyOtpRequest(
+                    email = identifier,
                     otp = otp,
                 )
             )

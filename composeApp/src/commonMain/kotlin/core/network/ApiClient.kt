@@ -9,7 +9,11 @@ object ApiClient {
     val client get() = HttpClientFactory.httpClient
 
     suspend inline fun <reified T> get(endpoint: String): T {
-        return client.get(Config.BASE_URL + endpoint).body()
+        return if (endpoint.startsWith("http")) {
+            client.get(endpoint).body()   // ✅ for full URL
+        } else {
+            client.get(Config.BASE_URL + endpoint).body() // ✅ for normal API
+        }
     }
 
     suspend inline fun <reified Req, reified Res> post(endpoint: String, payload: Req): Res {

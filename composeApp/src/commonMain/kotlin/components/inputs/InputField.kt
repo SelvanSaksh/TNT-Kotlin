@@ -11,7 +11,6 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.shadow
@@ -24,12 +23,10 @@ import androidx.compose.ui.text.input.*
 import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import theme.Black
-import theme.White
-import theme.DarkGray
-/**
- * Production-ready modern InputField component without icons
- */
+
+val Brand = Color(0xFF163C66)
+val BrandLight = Color(0xFFE8EFF7)
+
 @Composable
 fun InputField(
     value: String,
@@ -49,14 +46,14 @@ fun InputField(
     elevation: Dp = 0.dp,
     borderWidth: Dp = 1.dp,
     cornerRadius: Dp = 12.dp,
-    backgroundColor: Color = MaterialTheme.colorScheme.surface,
+    backgroundColor: Color = Color.White,
     textColor: Color = MaterialTheme.colorScheme.onSurface,
     placeholderColor: Color = MaterialTheme.colorScheme.onSurfaceVariant,
     disabledColor: Color = MaterialTheme.colorScheme.onSurface.copy(alpha = 0.38f),
     errorColor: Color = MaterialTheme.colorScheme.error,
-    focusedBorderColor: Color = MaterialTheme.colorScheme.primary,
-    unfocusedBorderColor: Color = MaterialTheme.colorScheme.outline,
-    successColor: Color = MaterialTheme.colorScheme.primary,
+    focusedBorderColor: Color = Brand,
+    unfocusedBorderColor: Color = Color(0xFFB0BEC5),
+    successColor: Color = Brand,
     showSuccessIndicator: Boolean = false,
     isSuccess: Boolean = false
 ) {
@@ -64,7 +61,6 @@ fun InputField(
     val isFocused by interactionSource.collectIsFocusedAsState()
     val focusManager = LocalFocusManager.current
 
-    // Animated border color
     val animatedBorderColor by animateColorAsState(
         targetValue = when {
             isError -> errorColor
@@ -75,15 +71,13 @@ fun InputField(
         animationSpec = tween(durationMillis = 200)
     )
 
-    // Animated elevation
     val animatedElevation by animateDpAsState(
         targetValue = if (isFocused) 2.dp else elevation,
         animationSpec = tween(durationMillis = 200)
     )
 
-    // Animated border width
     val animatedBorderWidth by animateDpAsState(
-        targetValue = if (isFocused) 1.5.dp else borderWidth,
+        targetValue = if (isFocused) 2.dp else borderWidth,
         animationSpec = tween(durationMillis = 200)
     )
 
@@ -91,7 +85,6 @@ fun InputField(
         modifier = modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(4.dp)
     ) {
-        // Label
         label?.let {
             Text(
                 text = it,
@@ -100,24 +93,14 @@ fun InputField(
             )
         }
 
-        // TextField Container
         Box(
             modifier = Modifier
                 .fillMaxWidth()
-                .shadow(
-                    elevation = animatedElevation,
-                    shape = shape,
-                    clip = true
-                )
+                .shadow(elevation = animatedElevation, shape = shape, clip = true)
                 .clip(shape)
-                .border(
-                    width = animatedBorderWidth,
-                    color = DarkGray,
-                    shape = shape
-                )
+                .border(width = animatedBorderWidth, color = animatedBorderColor, shape = shape)
                 .background(
-                    color = if (enabled) White
-                    else White.copy(alpha = 0.5f),
+                    color = if (isFocused) BrandLight else if (enabled) Color.White else Color.White.copy(alpha = 0.5f),
                     shape = shape
                 )
         ) {
@@ -138,7 +121,7 @@ fun InputField(
                         style = MaterialTheme.typography.bodyMedium
                     )
                 },
-                label = null, // We handle label externally
+                label = null,
                 isError = isError,
                 enabled = enabled,
                 readOnly = readOnly,
@@ -148,14 +131,14 @@ fun InputField(
                 keyboardOptions = keyboardOptions,
                 interactionSource = interactionSource,
                 textStyle = TextStyle(
-                    color = if (enabled) textColor else disabledColor,
+                    color = if (enabled) Brand else disabledColor,
                     fontSize = 16.sp
                 ),
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedTextColor = textColor,
+                    focusedTextColor = Brand,
                     unfocusedTextColor = textColor,
                     disabledTextColor = disabledColor,
-                    cursorColor = focusedBorderColor,
+                    cursorColor = Brand,
                     focusedBorderColor = Color.Transparent,
                     unfocusedBorderColor = Color.Transparent,
                     disabledBorderColor = Color.Transparent,
@@ -166,7 +149,6 @@ fun InputField(
             )
         }
 
-        // Error/Success message
         if (errorMessage != null && isError) {
             Text(
                 text = errorMessage,
@@ -176,87 +158,4 @@ fun InputField(
             )
         }
     }
-}
-@Composable
-fun PasswordInputField(
-    value: String,
-    onValueChange: (String) -> Unit,
-    placeholder: String = "Password",
-    modifier: Modifier = Modifier,
-    label: String? = "Password",
-    isError: Boolean = false,
-    errorMessage: String? = null
-) {
-    InputField(
-        value = value,
-        onValueChange = onValueChange,
-        placeholder = placeholder,
-        modifier = modifier,
-        label = label,
-        isError = isError,
-        errorMessage = errorMessage,
-        visualTransformation = PasswordVisualTransformation(),
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password)
-    )
-}
-
-@Composable
-fun EmailInputField(
-    value: String,
-    onValueChange: (String) -> Unit,
-    placeholder: String = "Email",
-    modifier: Modifier = Modifier,
-    label: String? = "Email",
-    isError: Boolean = false,
-    errorMessage: String? = null,
-    showSuccessIndicator: Boolean = true
-) {
-    // Simple email validation regex
-    fun isValidEmail(email: String): Boolean {
-        val emailRegex = Regex("^[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\\.[A-Za-z]{2,}\$")
-        return emailRegex.matches(email.trim())
-    }
-
-    val isEmailValid = remember(value) {
-        isValidEmail(value)
-    }
-
-    InputField(
-        value = value,
-        onValueChange = onValueChange,
-        placeholder = placeholder,
-        modifier = modifier,
-        label = label,
-        isError = isError,
-        errorMessage = errorMessage,
-        showSuccessIndicator = showSuccessIndicator,
-        isSuccess = isEmailValid,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email)
-    )
-}
-
-@Composable
-fun SearchInputField(
-    value: String,
-    onValueChange: (String) -> Unit,
-    placeholder: String = "Search...",
-    modifier: Modifier = Modifier,
-    onSearch: (() -> Unit)? = null,
-    onClear: (() -> Unit)? = null
-) {
-    var isActive by remember { mutableStateOf(false) }
-
-    InputField(
-        value = value,
-        onValueChange = {
-            onValueChange(it)
-            isActive = it.isNotEmpty()
-        },
-        placeholder = placeholder,
-        modifier = modifier,
-        singleLine = true,
-        keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Text),
-        shape = MaterialTheme.shapes.large,
-        cornerRadius = 24.dp
-    )
 }

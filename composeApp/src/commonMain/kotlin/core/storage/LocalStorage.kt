@@ -23,6 +23,7 @@ object StorageKeys {
     const val USER_ID = "user_id"
     const val USER_EMAIL = "user_email"
     const val USER_DETAIL = "user_detail"
+    const val COMPANY_ID = "company_id"
 }
 
 /**
@@ -49,6 +50,8 @@ class SessionManager(private val storage: LocalStorage) {
         storage.saveString(StorageKeys.USER_EMAIL, userEmail)
         storage.saveString(StorageKeys.USER_DETAIL, userDetail)
     }
+
+
     
     /**
      * Get access token
@@ -76,6 +79,14 @@ class SessionManager(private val storage: LocalStorage) {
      */
     fun getUserDetail(): String? {
         return storage.getString(StorageKeys.USER_DETAIL)
+    }
+
+    fun getCompanyId(): String? {
+        return storage.getString(StorageKeys.COMPANY_ID)
+    }
+
+    fun saveCompanyId(companyId: String) {
+        storage.saveString(StorageKeys.COMPANY_ID, companyId)
     }
     
     /**

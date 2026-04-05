@@ -27,6 +27,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.ui.unit.dp
+import features.app.MainAppScreen
+import features.app.assets.Assets
+import features.app.generations.CommonBarcodeScreen
+import features.app.generations.DynamicBarcodeType
+import features.app.generations.GS1DigitalBarcodeScreen
+import features.app.scans.Scans
+import network.models.UserDetail
+import screens.MultiLinkBarcodeScreen
 
 @Composable
 fun App() {
@@ -37,20 +45,21 @@ fun App() {
     var isLoading by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
     val scope = rememberCoroutineScope()
+    var verifyError by remember { mutableStateOf<String?>(null) }
 
     val sessionManager = remember { SessionManager(getLocalStorage()) }
     val json = remember { Json { ignoreUnknownKeys = true } }
 
+    var selectedBarcodeType: DynamicBarcodeType? by remember {
+        mutableStateOf(null)
+    }
     LaunchedEffect(Unit) {
         delay(1000)
-        // Check if user is already logged in
         if (sessionManager.isLoggedIn()) {
-            // Get user detail and check role
             val userDetailJson = sessionManager.getUserDetail()
             if (userDetailJson != null) {
                 try {
-                    val userDetail =
-                        json.decodeFromString<network.models.UserDetail>(userDetailJson)
+                    json.decodeFromString<UserDetail>(userDetailJson)
                     currentScreen = AppScreen.Home
                 } catch (e: Exception) {
                     currentScreen = AppScreen.Home
@@ -91,51 +100,54 @@ fun App() {
                     OtpScreen(
                         autoOtp = autoOtp,
                         isLoading = isLoading,
+                        verifyError = verifyError,
                         onVerifyOtp = { otp ->
                             scope.launch {
-
-                                isLoading = true   // ✅ start loading
+                                isLoading = true
+                                verifyError = null
 
                                 val result = AuthRepository.verifyOtp(userIdentifier, otp)
 
                                 result.onSuccess { response ->
-
                                     val userDetailJson = json.encodeToString(response.userDetail)
-
                                     sessionManager.saveSession(
                                         accessToken = response.accessToken,
                                         userId = response.userId,
                                         userEmail = response.userEmail,
                                         userDetail = userDetailJson
                                     )
-
-                                    snackbarHostState.showSnackbar(response.message)
-
                                     isLoading = false
-                                    currentScreen = AppScreen.Home
+                                    currentScreen = AppScreen.Home  // ← triggers MainAppScreen
                                 }
 
-                                result.onFailure {
+                                result.onFailure { error ->
                                     isLoading = false
-                                    snackbarHostState.showSnackbar("Verification failed")
+                                    verifyError = error.message ?: "Invalid OTP. Please try again."
                                 }
                             }
                         },
                         onResendOtp = {
                             scope.launch {
+                                verifyError = null
                                 AuthRepository.sendOtp(userIdentifier)
                             }
                         },
                         onBack = {
                             autoOtp = null
+                            verifyError = null
                             currentScreen = AppScreen.Login
                         }
                     )
                 }
 
-
-                AppScreen.Home -> {
-                    features.app.Home(
+                // ── All bottom nav tabs go through MainAppScreen ──────────────
+                AppScreen.Home,
+                AppScreen.History,
+                AppScreen.Scan,
+                AppScreen.Upgrade,
+                AppScreen.Profile -> {
+                    MainAppScreen(
+                        initialTab = currentScreen,
                         onNavigate = { screen ->
                             currentScreen = screen
                         }
@@ -149,6 +161,10 @@ fun App() {
                         },
                         onNavigate = { screen ->
                             currentScreen = screen
+                        },
+                        onNavigateBarcode = { type ->
+                            selectedBarcodeType = type
+                            currentScreen = AppScreen.CommonBarcodeScreen
                         }
                     )
                 }
@@ -162,7 +178,7 @@ fun App() {
                 }
 
                 AppScreen.Assets -> {
-                    features.app.assets.Assets(
+                    Assets(
                         onNavigate = { screen ->
                             currentScreen = screen
                         }
@@ -170,12 +186,43 @@ fun App() {
                 }
 
                 AppScreen.Scans -> {
-                    features.app.scans.Scans(
+                    Scans(
                         onNavigate = { screen ->
                             currentScreen = screen
                         }
                     )
                 }
+
+                AppScreen.GS1DigitalBarcodeScreen ->{
+                    GS1DigitalBarcodeScreen(
+                        onBack = {
+                            currentScreen = AppScreen.GenerateCodeScreen
+                        }
+                    )
+                }
+
+                AppScreen.MultiLinkBarcodeScreen -> {
+                    MultiLinkBarcodeScreen(
+                        onBack = {
+                            currentScreen = AppScreen.GenerateCodeScreen
+                        }
+                    )
+                }
+
+
+                 AppScreen.CommonBarcodeScreen -> {
+                    selectedBarcodeType?.let { type ->
+                        CommonBarcodeScreen(
+                            barcodeType = type,
+                            onBack = {
+                                currentScreen = AppScreen.GenerateCodeScreen
+                            }
+                        )
+                    }
+                }
+
+
+
             }
 
             SnackbarHost(

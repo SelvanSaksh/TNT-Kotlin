@@ -15,6 +15,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -75,7 +76,7 @@ fun LoginScreen(
                 Image(
                     painter = painterResource(Res.drawable.logo),
                     contentDescription = "App Logo",
-                    modifier = Modifier.size(150.dp)
+                    modifier = Modifier.size(200.dp)
                 )
 
                 InputField(
@@ -130,7 +131,7 @@ fun LoginScreen(
 
                 Text(
                     text = "By continuing, you agree to our Terms and Privacy Policy.",
-                    color = textColor.copy(alpha = 0.6f),
+                    color = Color(0xFF163C66).copy(alpha = 0.5f),
                     textAlign = TextAlign.Center,
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium

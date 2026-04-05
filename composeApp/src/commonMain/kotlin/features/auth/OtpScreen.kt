@@ -24,6 +24,7 @@ fun OtpScreen(
     modifier: Modifier = Modifier,
     autoOtp: String? = null,
     isLoading: Boolean,
+    verifyError: String? = null,
     onVerifyOtp: (String) -> Unit,
     onResendOtp: () -> Unit,
     onBack: () -> Unit
@@ -32,6 +33,14 @@ fun OtpScreen(
     var otp by remember(autoOtp) { mutableStateOf(autoOtp ?: "") }
     var isError by remember { mutableStateOf(false) }
     var errorMessage by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(verifyError) {
+        if (!verifyError.isNullOrBlank()) {
+            isError = true
+            errorMessage = verifyError
+            otp = ""
+        }
+    }
 
     Column(
         modifier = modifier
@@ -48,7 +57,7 @@ fun OtpScreen(
         Image(
             painter = painterResource(Res.drawable.logo),
             contentDescription = "App Logo",
-            modifier = Modifier.size(140.dp)
+            modifier = Modifier.size(200.dp)
         )
 
         Spacer(modifier = Modifier.height(32.dp))
@@ -98,9 +107,13 @@ fun OtpScreen(
             enabled = !isLoading,
             modifier = Modifier.fillMaxWidth(),
             onClick = {
+                println("OtpScreen: Verify button clicked with OTP: $otp")
+
                 if (otp.length == 6) {
+                    println("OtpScreen: OTP is valid. Triggering verification")
                     onVerifyOtp(otp)
                 } else {
+                    println("OtpScreen: Invalid OTP entered")
                     isError = true
                     errorMessage = "Please enter valid OTP"
                 }
@@ -112,7 +125,7 @@ fun OtpScreen(
         TextButton(onClick = onBack) {
             Text(
                 text = "Back to Login",
-                color = Color.Black,
+                color = Color(0xFF163C66),
                 fontWeight = FontWeight.SemiBold
             )
         }

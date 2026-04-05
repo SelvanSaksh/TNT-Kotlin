@@ -22,6 +22,8 @@ fun QrDataMatrixTabs(
     selectedTab: Int,
     onTabChange: (Int) -> Unit
 ) {
+    val navyBlue = Color(0xFF133d63)
+
     val tabs = listOf(
         "QR Code" to Icons.Default.QrCode,
         "Data Matrix" to Icons.Default.GridOn
@@ -45,7 +47,7 @@ fun QrDataMatrixTabs(
                     .weight(1f)
                     .fillMaxHeight()
                     .background(
-                        if (isSelected) Color.Black else Color.Transparent,
+                        if (isSelected) navyBlue else Color.Transparent,
                         RoundedCornerShape(10.dp)
                     )
                     .clickable { onTabChange(index) },
@@ -58,13 +60,13 @@ fun QrDataMatrixTabs(
                     Icon(
                         imageVector = icon,
                         contentDescription = title,
-                        tint = if (isSelected) Color.White else Color.Black,
+                        tint = if (isSelected) Color.White else navyBlue,
                         modifier = Modifier.size(18.dp)
                     )
                     Spacer(modifier = Modifier.width(6.dp))
                     Text(
                         text = title,
-                        color = if (isSelected) Color.White else Color.Black,
+                        color = if (isSelected) Color.White else navyBlue,
                         fontSize = 14.sp,
                         fontWeight = FontWeight.SemiBold
                     )

@@ -11,6 +11,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -135,7 +136,7 @@ fun OtpInputField(
                     text = if (showResendTimer) "Resend in ${remainingSeconds}s" else "Resend OTP",
                     color = if (showResendTimer)
                         MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.5f)
-                    else MaterialTheme.colorScheme.primary
+                    else Color(0xFF163C66)
                 )
             }
         }
@@ -154,11 +155,13 @@ private fun OtpDigitBox(
 
     val borderColor = when {
         isError -> MaterialTheme.colorScheme.error
-        isCurrent -> MaterialTheme.colorScheme.primary
-        else -> MaterialTheme.colorScheme.outline
+        isCurrent -> Color(0xFF163C66)
+        isFilled -> Color(0xFF163C66).copy(alpha = 0.5f)
+        else -> Color(0xFFB0BEC5)
     }
 
-    val borderWidth = if (isCurrent) 2.dp else 1.dp
+
+    val borderWidth = if (isCurrent || isFilled) 2.dp else 1.dp
 
     Box(
         modifier = Modifier

@@ -26,8 +26,9 @@ fun AppSwitch(
         label = "switch_thumb_offset"
     )
 
-    val trackColor = if (checked) Color.Black else Color.Gray
-    val borderColor = Color.Black
+    val navyBlue = Color(0xFF133d63)
+    val trackColor = if (checked) navyBlue else Color.Gray
+    val borderColor = navyBlue
     val thumbColor = if (checked) Color.White else Color.White
 
     Box(
