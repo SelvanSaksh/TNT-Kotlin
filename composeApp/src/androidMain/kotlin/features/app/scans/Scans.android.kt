@@ -14,6 +14,7 @@ import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.scanner_sdk.customview.auth.AuthScannerView
+import com.example.scanner_sdk.customview.authandsingle.VerificationScannerView
 import com.example.scanner_sdk.customview.multi.view.MultiScannerView
 import com.example.scanner_sdk.customview.single.ScannerController
 import com.example.scanner_sdk.customview.single.view.SingleScannerView
@@ -24,7 +25,7 @@ import navigation.AppScreen
 actual fun ScannerView(
     scanMode: String,
     onScanResult: (String) -> Unit,
-    onNavigate: (AppScreen) -> Unit
+    onNavigate: (String) -> Unit
 ) {
 
     val context = LocalContext.current
@@ -41,6 +42,22 @@ actual fun ScannerView(
         factory = { ctx ->
 
             when (scanMode) {
+
+                "VERIFY" -> {
+                    val view = VerificationScannerView(ctx)
+                    controller = ScannerController(
+                        singleScannerView = null,
+                        verificationScannerView = view,
+                        multiScannerView = null,
+                        authScannerView = null,
+                        lifecycleOwner = lifecycleOwner,
+                        fragmentManager = fragmentManager,
+                        onScanned = onScanResult
+                    )
+
+                    controller?.startVerifyScanner(ctx)
+                    view
+                }
 
                 "SINGLE" -> {
                     val view = SingleScannerView(ctx)

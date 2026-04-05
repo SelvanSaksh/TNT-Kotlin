@@ -5,9 +5,11 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.*
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
+import kotlinx.coroutines.delay
 import org.jetbrains.compose.resources.ExperimentalResourceApi
 import org.jetbrains.compose.resources.painterResource
 import theme.Black
@@ -17,7 +19,12 @@ import sakkshasset.composeapp.generated.resources.logo
 
 @OptIn(ExperimentalResourceApi::class)
 @Composable
-fun InitialScreen() {
+fun InitialScreen(onNavigate: () -> Unit) {
+
+    LaunchedEffect(Unit) {
+        delay(2000)
+        onNavigate()
+    }
     val bgColor = White
     Box(
         modifier = Modifier
@@ -29,7 +36,7 @@ fun InitialScreen() {
         Image(
             painter = painterResource(Res.drawable.logo),
             contentDescription = "App Logo",
-            modifier = Modifier.size(180.dp)
+            modifier = Modifier.size(250.dp)
         )
     }
 }

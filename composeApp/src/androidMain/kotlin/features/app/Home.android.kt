@@ -8,10 +8,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.platform.LocalContext
 import features.app.scans.ScannerActivity
 import navigation.AppScreen
+import navigation.appscreen.Screens
 
 @Composable
 actual fun HomeScanButton(
-    onNavigate: (AppScreen) -> Unit,
+    onNavigate: (Screens) -> Unit,
     shouldTriggerScan: Boolean,
     onScanTriggered: () -> Unit
 ) {
@@ -21,7 +22,7 @@ actual fun HomeScanButton(
     LaunchedEffect(shouldTriggerScan) {
         if (shouldTriggerScan) {
             // Navigate to Scans screen which will handle the camera
-            onNavigate(AppScreen.Scans)
+            onNavigate(Screens.Scan)
             onScanTriggered()
         }
     }

@@ -1,6 +1,8 @@
 package features.app.scans
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -9,25 +11,27 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import navigation.AppScreen
+import navigation.appscreen.Screens
 import theme.White
 
 @Composable
 expect fun ScannerView(
     scanMode: String,
     onScanResult: (String) -> Unit,
-    onNavigate: (AppScreen) -> Unit
+    onNavigate: (String) -> Unit
 )
 
 @Composable
 fun Scans(
-    onNavigate: (AppScreen) -> Unit
+    onNavigate: (String) -> Unit
 ) {
-    var currentScanMode by remember { mutableStateOf("SINGLE") }
+    var currentScanMode by remember { mutableStateOf("VERIFY") }
     var scannedResult by remember { mutableStateOf<String?>(null) }
     var showResult by remember { mutableStateOf(false) }
     
@@ -53,7 +57,7 @@ fun Scans(
                 }
             }
             // Bottom mode switcher buttons
-            Row(
+/*            Row(
                 modifier = Modifier
                     .fillMaxWidth()
 //                    .align(Alignment.BottomCenter)
@@ -61,36 +65,27 @@ fun Scans(
                     .padding(16.dp),
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
-                ModeButton(
-                    title = "Single",
-                    icon = Icons.Default.QrCode2,
-                    isSelected = currentScanMode == "SINGLE",
-                    onClick = {
-                        currentScanMode = "SINGLE"
+                Text(
+                    text = "Single Scan",
+                    color = Color.White,
+                    modifier = Modifier
+                        .background(
+                            if (currentScanMode == "VERIFY") Color.Blue else Color.Transparent,
+                        )
+                        .clickable {
+                        currentScanMode = "VERIFY"
                         showResult = false
                     }
                 )
-
-                ModeButton(
-                    title = "Auth",
-                    icon = Icons.Default.VerifiedUser,
-                    isSelected = currentScanMode == "AUTH",
-                    onClick = {
-                        currentScanMode = "AUTH"
-                        showResult = false
-                    }
-                )
-
-                ModeButton(
-                    title = "Multi",
-                    icon = Icons.Default.QrCode,
-                    isSelected = currentScanMode == "MULTI",
-                    onClick = {
+                Text(
+                    "Multi Scan",
+                    modifier = Modifier.clickable {
                         currentScanMode = "MULTI"
                         showResult = false
                     }
                 )
-            }
+            }*/
+
         }
 
         /*ScannerView(
@@ -175,7 +170,7 @@ fun Scans(
         
         // Back button
         IconButton(
-            onClick = { onNavigate(AppScreen.Home) },
+            onClick = { onNavigate(Screens.HomeScreen.destRoute) },
             modifier = Modifier
                 .align(Alignment.TopStart)
                 .padding(16.dp)
@@ -186,6 +181,96 @@ fun Scans(
                 contentDescription = "Back",
                 tint = White
             )
+        }
+
+        Box(
+            modifier = Modifier
+                .padding(bottom = 12.dp)
+                .align(Alignment.BottomCenter)
+        ) {
+            ScanModeSelector(
+                currentScanMode = currentScanMode,
+                onModeChange = { mode ->
+                    currentScanMode = mode
+                    showResult = false
+                }
+            )
+        }
+    }
+}
+
+@Composable
+fun ScanModeSelector(
+    currentScanMode: String,
+    onModeChange: (String) -> Unit
+) {
+    Box(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(horizontal = 16.dp),
+        contentAlignment = Alignment.BottomCenter
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(48.dp)
+                .clip(RoundedCornerShape(16.dp))
+                .background(Color(0xCC111827))
+                .border(
+                    width = 1.dp,
+                    color = Color.White.copy(alpha = 0.2f),
+                    shape = RoundedCornerShape(16.dp)
+                )
+                .padding(4.dp),
+            horizontalArrangement = Arrangement.SpaceEvenly
+        ) {
+            // Single Scan Tab
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(
+                        if (currentScanMode == "VERIFY") Color(0xFF2563EB)
+                        else Color.Transparent
+                    )
+                    .clickable {
+                        onModeChange("VERIFY")
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "Single Scan",
+                    color = if (currentScanMode == "SINGLE") Color.White
+                    else Color.White.copy(alpha = 0.6f),
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
+
+            // Multi Scan Tab
+            Box(
+                modifier = Modifier
+                    .weight(1f)
+                    .fillMaxHeight()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(
+                        if (currentScanMode == "MULTI") Color(0xFF2563EB)
+                        else Color.Transparent
+                    )
+                    .clickable {
+                        onModeChange("MULTI")
+                    },
+                contentAlignment = Alignment.Center
+            ) {
+                Text(
+                    text = "Multi Scan",
+                    color = if (currentScanMode == "MULTI") Color.White
+                    else Color.White.copy(alpha = 0.6f),
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.Medium
+                )
+            }
         }
     }
 }

@@ -41,6 +41,7 @@ import core.network.models.AuditDetails
 import core.network.models.LocationDetailsPayload
 import core.storage.SessionManager
 import core.storage.getLocalStorage
+import utils.DeviceLocationProvider
 import kotlin.time.Clock
 
 private val Brand       = Color(0xFF133D63)
@@ -70,7 +71,6 @@ fun CommonBarcodeScreen(
     onBack: () -> Unit,
     onShare: ((url: String) -> Unit)? = null,
     onSave:  ((url: String) -> Unit)? = null,
-    locationProvider: DeviceLocationProvider,
 ) {
     var input            by remember { mutableStateOf("") }
     var selectedSize     by remember { mutableStateOf(sizeOptions[0]) }
@@ -79,6 +79,7 @@ fun CommonBarcodeScreen(
     var errorMsg         by remember { mutableStateOf<String?>(null) }
     val scope            = rememberCoroutineScope()
     val sessionManager = SessionManager(getLocalStorage())
+    val locationProvider = remember { DeviceLocationProvider() }
 
     val canGenerate = input.isNotBlank() && !isLoading
 
@@ -137,6 +138,7 @@ fun CommonBarcodeScreen(
                     lat = locationPair.first
                     lon = locationPair.second
 
+                    println("generate: $lat, $lon")
                     val locationData = AppRepository
                         .getLocationDetails(lat, lon)
                         .getOrNull()
@@ -385,11 +387,11 @@ fun CommonBarcodeScreen(
                              modifier = Modifier.fillMaxSize(),
                              contentScale = ContentScale.Fit,
                          )
-                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+/*                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
                             Icon(barcodeType.icon, contentDescription = null, tint = Brand, modifier = Modifier.size(72.dp))
                             Spacer(Modifier.height(8.dp))
                             Text(imageUrl ?: "", fontSize = 9.sp, color = Brand.copy(alpha = 0.4f))
-                        }
+                        }*/
                     }
 
                     Spacer(Modifier.height(14.dp))

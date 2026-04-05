@@ -26,6 +26,7 @@ import core.storage.getLocalStorage
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import navigation.AppScreen
+import navigation.appscreen.Screens
 import network.models.Asset
 import network.models.UserDetail
 import network.repository.AssetRepository
@@ -34,7 +35,7 @@ import theme.White
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun Assets(
-    onNavigate: ((AppScreen) -> Unit)? = null
+    onNavigate: ((String) -> Unit)? = null
 ) {
     val sessionManager = remember { SessionManager(getLocalStorage()) }
     val json = remember { Json { ignoreUnknownKeys = true } }
@@ -399,7 +400,7 @@ fun Assets(
                         onClick = {
                             sessionManager.clearSession()
                             showLogoutDialog = false
-                            onNavigate?.invoke(AppScreen.Login)
+                            onNavigate?.invoke(Screens.LoginScreen.destRoute)
                         }
                     ) {
                         Text("Logout", color = Color.Red)

@@ -20,11 +20,12 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import navigation.AppScreen
+import navigation.appscreen.Screens
 
 @Composable
 fun GenerateCodeScreen(
     onBack: () -> Unit,
-    onNavigate: (AppScreen) -> Unit,
+    onNavigate: (String) -> Unit,
     onNavigateBarcode: (DynamicBarcodeType) -> Unit
 ) {
     var selectedTab by remember { mutableStateOf(0) }
@@ -149,15 +150,15 @@ fun GenerateCodeScreen(
                         when (option) {
 
                             "GS1 2D Barcode" -> {
-                                onNavigate(AppScreen.GS12DBarcode)
+                                onNavigate(Screens.GS12DBarcode.destRoute)
                             }
 
                             "GS1 Digital Link" -> {
-                                onNavigate(AppScreen.GS1DigitalBarcodeScreen)
+                                onNavigate(Screens.GS1DigitalBarcodeScreen.destRoute)
                             }
 
                             "Multi URL" -> {
-                                onNavigate(AppScreen.MultiLinkBarcodeScreen)
+                                onNavigate(Screens.MultiLinkBarcodeScreen.destRoute)
                             }
 
                             else -> {

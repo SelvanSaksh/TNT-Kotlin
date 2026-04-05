@@ -40,7 +40,7 @@ kotlin {
             implementation(compose.preview)
             implementation(libs.androidx.activity.compose)
 
-            implementation("com.github.Gowthamgsv32:scanner-sdk:1.9.3")
+            implementation("com.github.Gowthamgsv32:scanner-sdk:1.9.4")
             implementation("androidx.constraintlayout:constraintlayout:2.2.1")
             implementation("androidx.fragment:fragment-ktx:1.8.9")
             implementation("com.google.android.material:material:1.13.0")
@@ -66,6 +66,9 @@ kotlin {
             // Coil
             implementation("io.coil-kt.coil3:coil-compose:3.4.0")
             implementation("io.coil-kt.coil3:coil-network-ktor3:3.4.0")
+
+            // navigation
+            implementation(libs.navigation.compose)
 
             // Compose UI
             implementation(compose.runtime)

@@ -21,8 +21,11 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import core.storage.SessionManager
 import core.storage.getLocalStorage
+import features.app.scans.ScannerView
+import features.app.scans.Scans
 import kotlinx.serialization.json.Json
 import navigation.AppScreen
+import navigation.appscreen.Screens
 import network.models.UserDetail
 
 private val BlueAccent = Color(0xFF163C66)
@@ -44,7 +47,7 @@ private val bottomTabs = listOf(
 @Composable
 fun MainAppScreen(
     initialTab: AppScreen = AppScreen.Home,
-    onNavigate: (AppScreen) -> Unit
+    onNavigate: (Screens) -> Unit
 ) {
     var activeTab by remember { mutableStateOf(initialTab) }
 
@@ -76,7 +79,11 @@ fun MainAppScreen(
             when (activeTab) {
                 AppScreen.Home    -> Home(onNavigate = onNavigate)
                 AppScreen.History -> features.app.history.History()
-                AppScreen.Scan    -> ScanPlaceholder()
+                AppScreen.Scan    -> Scans(onNavigate = {})/*ScannerView(
+                    scanMode = "VERIFY",
+                    onNavigate = {},
+                    onScanResult = {}
+                )*/
                 AppScreen.Upgrade -> UpgradeView(
 
                 )
@@ -84,9 +91,9 @@ fun MainAppScreen(
                     userName = userDetail?.firstName,
                     email = userDetail?.email,
                     role = userDetail?.role,
-                    onNavigate = onNavigate,
+                    onNavigate = {},
                     onLogout = {
-                        onNavigate(AppScreen.Login) // or handle logout
+                        onNavigate(Screens.LoginScreen) // or handle logout
                     }
                 )
                 else              -> Home(onNavigate = onNavigate)

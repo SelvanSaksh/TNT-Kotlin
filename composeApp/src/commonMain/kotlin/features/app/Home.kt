@@ -1,34 +1,84 @@
 package features.app
 
-import androidx.compose.animation.core.*
-import androidx.compose.foundation.*
-import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.shape.*
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.filled.*
-import androidx.compose.material.icons.outlined.*
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
-import androidx.compose.ui.*
-import androidx.compose.ui.draw.*
-import androidx.compose.ui.graphics.*
+import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ChevronRight
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.ExitToApp
+import androidx.compose.material.icons.filled.MoreVert
+import androidx.compose.material.icons.filled.Notifications
+import androidx.compose.material.icons.filled.PersonAdd
+import androidx.compose.material.icons.filled.QrCode
+import androidx.compose.material.icons.filled.QrCodeScanner
+import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.QrCodeScanner
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.unit.*
+import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import core.storage.SessionManager
 import core.storage.getLocalStorage
-import io.ktor.client.*
-import io.ktor.client.call.*
-import io.ktor.client.request.*
-import io.ktor.client.plugins.contentnegotiation.*
-import io.ktor.serialization.kotlinx.json.*
+import io.ktor.client.HttpClient
+import io.ktor.client.call.body
+import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
+import io.ktor.client.request.get
+import io.ktor.client.request.header
+import io.ktor.client.request.parameter
+import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.launch
-import kotlinx.serialization.*
-import kotlinx.serialization.json.*
-import navigation.AppScreen
+import kotlinx.serialization.Serializable
+import kotlinx.serialization.json.Json
+import navigation.appscreen.Screens
 import network.models.UserDetail
 import theme.White
-import androidx.compose.runtime.Composable
 
 // ── Colors from Swift ────────────────────────────────────────────────────────
 private val NavyDark     = Color(0xFF163C66)
@@ -70,7 +120,7 @@ data class HistoryItem(
 )
 
 @Composable
-fun Home(onNavigate: (AppScreen) -> Unit) {
+fun Home(onNavigate: (Screens) -> Unit) {
 
     val sessionManager = remember { SessionManager(getLocalStorage()) }
     val json = remember { Json { ignoreUnknownKeys = true } }
@@ -186,7 +236,7 @@ fun Home(onNavigate: (AppScreen) -> Unit) {
                     TextButton(onClick = {
                         sessionManager.clearSession()
                         showLogoutDialog = false
-                        onNavigate(AppScreen.Login)
+                        onNavigate(Screens.LoginScreen)
                     }) { Text("Logout", color = Color.Red) }
                 },
                 dismissButton = {
@@ -264,7 +314,7 @@ fun HomeHeader(
 
 // ── Hero Banner ───────────────────────────────────────────────────────────────
 @Composable
-fun HeroBanner(onNavigate: (AppScreen) -> Unit) {
+fun HeroBanner(onNavigate: (Screens) -> Unit) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
@@ -297,7 +347,7 @@ fun HeroBanner(onNavigate: (AppScreen) -> Unit) {
             Text("Generate professional QR codes\nand barcodes in seconds.",
                 fontSize = 13.sp, color = Color.White.copy(alpha = 0.85f), lineHeight = 19.sp)
             Button(
-                onClick = { onNavigate(AppScreen.GenerateCodeScreen) },
+                onClick = { onNavigate(Screens.GenerateCodeScreen) },
                 colors = ButtonDefaults.buttonColors(containerColor = Color.White),
                 shape = RoundedCornerShape(10.dp),
                 contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp)

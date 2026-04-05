@@ -4,42 +4,55 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.SnackbarHost
-import androidx.compose.material3.SnackbarHostState
-import androidx.compose.runtime.*
-import androidx.compose.ui.Alignment
-import androidx.compose.ui.Modifier
-import features.InitialScreen
-import features.LoginScreen
-import features.auth.OtpScreen
-import navigation.AppScreen
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.launch
-import network.repository.AuthRepository
-import core.storage.SessionManager
-import core.storage.getLocalStorage
-import kotlinx.serialization.encodeToString
-import kotlinx.serialization.json.Json
-import features.app.generations.GenerateCodeScreen
-import features.app.generations.GS12DBarcode
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
-import androidx.compose.ui.unit.dp
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.SnackbarHost
+import androidx.compose.material3.SnackbarHostState
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.navigation.compose.NavHost
+import androidx.navigation.compose.composable
+import androidx.navigation.compose.rememberNavController
+import core.storage.SessionManager
+import core.storage.getLocalStorage
+import features.InitialScreen
+import features.LoginScreen
 import features.app.MainAppScreen
 import features.app.assets.Assets
 import features.app.generations.CommonBarcodeScreen
 import features.app.generations.DynamicBarcodeType
+import features.app.generations.GS12DBarcode
 import features.app.generations.GS1DigitalBarcodeScreen
+import features.app.generations.GenerateCodeScreen
 import features.app.scans.Scans
+import features.auth.OtpScreen
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import kotlinx.serialization.json.Json
+import navigation.AppScreen
+import navigation.appscreen.Screens
 import network.models.UserDetail
+import network.repository.AuthRepository
 import screens.MultiLinkBarcodeScreen
 
 @Composable
 fun App() {
 
-    var currentScreen by remember { mutableStateOf(AppScreen.Initial) }
+    val navController = rememberNavController()
+
+    var currentScreen by remember { mutableStateOf("") }
     var userIdentifier by remember { mutableStateOf("") }
     var autoOtp by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(false) }
@@ -54,26 +67,169 @@ fun App() {
         mutableStateOf(null)
     }
     LaunchedEffect(Unit) {
-        delay(1000)
         if (sessionManager.isLoggedIn()) {
             val userDetailJson = sessionManager.getUserDetail()
             if (userDetailJson != null) {
                 try {
                     json.decodeFromString<UserDetail>(userDetailJson)
-                    currentScreen = AppScreen.Home
                 } catch (e: Exception) {
-                    currentScreen = AppScreen.Home
                 }
-            } else {
-                currentScreen = AppScreen.Home
             }
-        } else {
-            currentScreen = AppScreen.Login
         }
     }
 
     MaterialTheme {
-        Box(
+        Scaffold(
+            contentWindowInsets = WindowInsets(0)
+        ) { paddingValues ->
+            NavHost(
+                navController = navController,
+                startDestination = Screens.SplashScreen.destRoute,
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(paddingValues)
+                    .background(MaterialTheme.colorScheme.surface),
+            ) {
+                composable(Screens.SplashScreen.destRoute) {
+                    InitialScreen {
+                        if (sessionManager.isLoggedIn() && sessionManager.getUserDetail() != null) {
+                            navController.navigate(Screens.HomeScreen.destRoute)
+                        } else {
+                            navController.navigate(Screens.LoginScreen.destRoute)
+                        }
+                    }
+                }
+
+                composable(Screens.LoginScreen.destRoute) {
+                    LoginScreen(
+                        onNavigateToOtp = { identifier, otpResponse ->
+                            userIdentifier = identifier
+                            autoOtp = if (otpResponse.isAutoGen) otpResponse.otp else null
+                            navController.navigate(Screens.OTPScreen.destRoute)
+                        }
+                    )
+                }
+
+                composable(Screens.OTPScreen.destRoute) {
+                    OtpScreen(
+                        autoOtp = autoOtp,
+                        isLoading = isLoading,
+                        verifyError = verifyError,
+                        onVerifyOtp = { otp ->
+                            scope.launch {
+                                isLoading = true
+                                verifyError = null
+
+                                val result = AuthRepository.verifyOtp(userIdentifier, otp)
+
+                                result.onSuccess { response ->
+                                    val userDetailJson = json.encodeToString(response.userDetail)
+                                    sessionManager.saveSession(
+                                        accessToken = response.accessToken,
+                                        userId = response.userId,
+                                        userEmail = response.userEmail,
+                                        userDetail = userDetailJson
+                                    )
+                                    isLoading = false
+                                    navController.navigate(Screens.HomeScreen.destRoute)
+                                }
+
+                                result.onFailure { error ->
+                                    isLoading = false
+                                    verifyError = error.message ?: "Invalid OTP. Please try again."
+                                }
+                            }
+                        },
+                        onResendOtp = {
+                            scope.launch {
+                                verifyError = null
+                                AuthRepository.sendOtp(userIdentifier)
+                            }
+                        },
+                        onBack = {
+                            autoOtp = null
+                            verifyError = null
+                            navController.popBackStack()
+                        }
+                    )
+                }
+
+                composable(Screens.HomeScreen.destRoute) {
+                    MainAppScreen(
+                        onNavigate = { screen ->
+                            navController.navigate(screen.destRoute)
+                        }
+                    )
+                }
+
+                composable(Screens.GenerateCodeScreen.destRoute) {
+                    GenerateCodeScreen(
+                        onBack = {
+                            navController.popBackStack()
+                        },
+                        onNavigate = { screen ->
+                            navController.navigate(screen)
+                        },
+                        onNavigateBarcode = { type ->
+                            selectedBarcodeType = type
+                            navController.navigate(Screens.CommonBarcodeScreen.destRoute)
+                        }
+                    )
+                }
+
+                composable(Screens.GS12DBarcode.destRoute) {
+                    GS12DBarcode(
+                        onBack = {
+                            navController.popBackStack()
+                        }
+                    )
+                }
+
+                composable(Screens.GS1DigitalBarcodeScreen.destRoute) {
+                    GS1DigitalBarcodeScreen(
+                        onBack = {
+                            navController.popBackStack()
+                        }
+                    )
+                }
+
+                composable(Screens.MultiLinkBarcodeScreen.destRoute) {
+                    MultiLinkBarcodeScreen(
+                        onBack = {
+                            navController.popBackStack()
+                        }
+                    )
+                }
+
+                composable(Screens.CommonBarcodeScreen.destRoute) {
+                    selectedBarcodeType?.let { type ->
+                        CommonBarcodeScreen(
+                            barcodeType = type,
+                            onBack = {
+                                navController.popBackStack()
+                            },
+                        )
+                    }
+                }
+
+                composable(Screens.Scan.destRoute) {
+                    Scans(
+                        onNavigate = { screen ->
+                            navController.navigate(screen)
+                        }
+                    )
+                }
+
+                composable(Screens.Assets.destRoute) {
+                    Assets(
+                        onNavigate = { screen ->
+                            navController.navigate(screen)
+                        }
+                    )
+                }
+            }
+        }
+/*        Box(
             modifier = Modifier
                 .fillMaxSize()
                 .background(MaterialTheme.colorScheme.background)
@@ -216,7 +372,7 @@ fun App() {
                             barcodeType = type,
                             onBack = {
                                 currentScreen = AppScreen.GenerateCodeScreen
-                            }
+                            },
                         )
                     }
                 }
@@ -229,6 +385,6 @@ fun App() {
                 hostState = snackbarHostState,
                 modifier = Modifier.align(Alignment.BottomCenter)
             )
-        }
+        }*/
     }
 }
