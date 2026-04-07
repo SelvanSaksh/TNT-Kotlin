@@ -4,10 +4,6 @@ import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 
-/**
- * Interface for local storage operations
- * Platform-specific implementations will be provided for Android and iOS
- */
 expect class LocalStorage {
     fun saveString(key: String, value: String)
     fun getString(key: String): String?
@@ -15,9 +11,6 @@ expect class LocalStorage {
     fun clear()
 }
 
-/**
- * Storage keys used throughout the app
- */
 object StorageKeys {
     const val ACCESS_TOKEN = "access_token"
     const val USER_ID = "user_id"
@@ -26,19 +19,13 @@ object StorageKeys {
     const val COMPANY_ID = "company_id"
 }
 
-/**
- * User session manager for handling authentication data
- */
 class SessionManager(private val storage: LocalStorage) {
     
     private val json = Json { 
         ignoreUnknownKeys = true
         encodeDefaults = true
     }
-    
-    /**
-     * Save user session data
-     */
+
     fun saveSession(
         accessToken: String,
         userId: Int,
@@ -52,31 +39,19 @@ class SessionManager(private val storage: LocalStorage) {
     }
 
 
-    
-    /**
-     * Get access token
-     */
+
     fun getAccessToken(): String? {
         return storage.getString(StorageKeys.ACCESS_TOKEN)
     }
-    
-    /**
-     * Get user ID
-     */
+
     fun getUserId(): Int? {
         return storage.getString(StorageKeys.USER_ID)?.toIntOrNull()
     }
-    
-    /**
-     * Get user email
-     */
+
     fun getUserEmail(): String? {
         return storage.getString(StorageKeys.USER_EMAIL)
     }
-    
-    /**
-     * Get user detail as JSON string
-     */
+
     fun getUserDetail(): String? {
         return storage.getString(StorageKeys.USER_DETAIL)
     }
@@ -88,17 +63,11 @@ class SessionManager(private val storage: LocalStorage) {
     fun saveCompanyId(companyId: String) {
         storage.saveString(StorageKeys.COMPANY_ID, companyId)
     }
-    
-    /**
-     * Check if user is logged in
-     */
+
     fun isLoggedIn(): Boolean {
         return getAccessToken() != null
     }
-    
-    /**
-     * Clear all session data (logout)
-     */
+
     fun clearSession() {
         storage.remove(StorageKeys.ACCESS_TOKEN)
         storage.remove(StorageKeys.USER_ID)

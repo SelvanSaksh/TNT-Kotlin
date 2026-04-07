@@ -27,11 +27,18 @@ import coil3.compose.AsyncImage
 import components.AppSwitch
 import components.InputField
 import components.PrimaryButton
+import core.network.models.AuditDetails
 import core.network.models.FetchAi
 import core.network.repository.AppRepository
+import core.storage.SessionManager
+import core.storage.getLocalStorage
 import kotlinx.coroutines.launch
+import utils.DeviceLocationProvider
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
+import core.network.models.AuditLogRequest
+import core.network.models.LocationDetailsPayload
+
 
 // ─── Theme ────────────────────────────────────────────────────────────────────
 private val Brand       = Color(0xFF133D63)
@@ -132,6 +139,9 @@ fun GS1DigitalBarcodeScreen(
     onErrorDismiss: () -> Unit = {},
     onBack: () -> Unit = {},
 ) {
+    val sessionManager = SessionManager(getLocalStorage())
+    val locationProvider = remember { DeviceLocationProvider() }
+
     val scope = rememberCoroutineScope()
     var barcodeType by remember { mutableStateOf(BarcodeType.GS1_QR_CODE) }
     var form by remember { mutableStateOf(GS1FormState()) }
@@ -436,8 +446,85 @@ fun GS1DigitalBarcodeScreen(
                     val result = AppRepository.generateBarcode(bcType, url)
 
                     result.onSuccess {
-                        barcodeImageUrl = it   // ✅ correct
+
+                        barcodeImageUrl = it
                         isGenerating = false
+
+                        // 🔥 AUDIT LOG START
+                        scope.launch {
+
+                            var lat = 0.0
+                            var lon = 0.0
+                            var city: String? = null
+                            var state: String? = null
+
+                            var locationPair: Pair<Double, Double>? = null
+
+                            repeat(3) {
+                                locationPair = locationProvider.getCurrentLocation()
+                                println("📍 Attempt ${it + 1}: $locationPair")
+
+                                if (locationPair != null) return@repeat
+                                kotlinx.coroutines.delay(1000)
+                            }
+
+                            if (locationPair != null) {
+                                lat = locationPair!!.first
+                                lon = locationPair!!.second
+
+                                val locationResult = AppRepository.getLocationDetails(lat, lon)
+
+                                locationResult.onSuccess {
+                                    city = it.city ?: "Unknown"
+                                    state = it.state ?: "Unknown"
+
+                                    println("🏙️ CITY: $city")
+                                    println("🌍 STATE: $state")
+                                }.onFailure {
+                                    println("❌ LOCATION FAILED: ${it.message}")
+                                    city = "Unknown"
+                                    state = "Unknown"
+                                }
+                            }
+
+                            val companyId = sessionManager.getCompanyId()
+                            if (companyId.isNullOrEmpty()) {
+                                println("❌ COMPANY ID MISSING")
+                                return@launch
+                            }
+
+                            val auditRequest = AuditLogRequest(
+                                type = 1,
+                                company_id = companyId,
+                                user_id = sessionManager.getUserId()?.toString() ?: "",
+                                location_details = LocationDetailsPayload(
+                                    lat = lat,
+                                    long = lon,
+                                    currentCity = city,
+                                    state = state
+                                ),
+                                details = AuditDetails(
+                                    barcode = url,   // 🔥 IMPORTANT (Digital Link URL)
+                                    status = "generated",
+                                    barcodeType = if (barcodeType == BarcodeType.GS1_QR_CODE)
+                                        "GS1-DL QR Code" else "GS1-DL DataMatrix",
+                                    device = "Android",
+                                    timestamp = Clock.System.now().toString()
+                                )
+                            )
+
+                            println("🚀 DIGITAL LINK AUDIT:")
+                            println("📦 URL: $url")
+                            println("📍 lat: $lat, lon: $lon")
+
+                            val auditResult = AppRepository.sendAuditLog(auditRequest)
+
+                            if (auditResult.isSuccess) {
+                                println("✅ DIGITAL LINK AUDIT SUCCESS")
+                            } else {
+                                println("❌ DIGITAL LINK AUDIT FAILED: ${auditResult.exceptionOrNull()?.message}")
+                            }
+                        }
                     }
 
                     result.onFailure {

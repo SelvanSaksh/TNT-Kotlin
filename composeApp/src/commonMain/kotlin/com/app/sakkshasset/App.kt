@@ -123,13 +123,17 @@ fun App() {
                                 val result = AuthRepository.verifyOtp(userIdentifier, otp)
 
                                 result.onSuccess { response ->
+
                                     val userDetailJson = json.encodeToString(response.userDetail)
+
                                     sessionManager.saveSession(
                                         accessToken = response.accessToken,
                                         userId = response.userId,
                                         userEmail = response.userEmail,
                                         userDetail = userDetailJson
                                     )
+                                    sessionManager.saveCompanyId(response.userDetail.companyId.toString())
+
                                     isLoading = false
                                     navController.navigate(Screens.HomeScreen.destRoute)
                                 }

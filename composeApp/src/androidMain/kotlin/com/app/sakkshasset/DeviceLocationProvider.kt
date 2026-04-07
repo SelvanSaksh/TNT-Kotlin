@@ -41,9 +41,9 @@ class DeviceLocationProvider(
 }*/
 
 
-actual class DeviceLocationProvider actual constructor() {  // ✅ actual keyword, no constructor param
+actual class DeviceLocationProvider actual constructor() {
 
-    private val context = MyApp.appContext  // ✅ Get context from global app reference
+    private val context = MyApp.appContext
 
     private val client = LocationServices
         .getFusedLocationProviderClient(context)

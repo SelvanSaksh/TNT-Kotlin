@@ -27,6 +27,9 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import components.InputField
 import components.PrimaryButton
+import core.storage.SessionManager
+import core.storage.getLocalStorage
+import utils.DeviceLocationProvider
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 
@@ -133,6 +136,10 @@ fun MultiLinkBarcodeScreen(
     onCopyUrl: (url: String) -> Unit = {},
     onBack: () -> Unit = {},
 ) {
+    val sessionManager = SessionManager(getLocalStorage())
+    val locationProvider = remember { DeviceLocationProvider() }
+    val scope = rememberCoroutineScope()
+
     var form by remember { mutableStateOf(MultiLinkFormState()) }
     val disabled = remember(form) { isFormDisabled(form) }
 
@@ -294,7 +301,6 @@ fun MultiLinkBarcodeScreen(
                 }
 
                 if (generatedBarcodeImageUrl != null) {
-                    // ── Generated state ────────────────────────────────────
                     Box(
                         modifier = Modifier
                             .fillMaxWidth()
@@ -354,6 +360,7 @@ fun MultiLinkBarcodeScreen(
                             )
                         }
                     }
+
                 } else {
                     // ── Empty state ────────────────────────────────────────
                     Box(
@@ -399,6 +406,7 @@ fun MultiLinkBarcodeScreen(
                 }
             }
         }
+
     }
 }
 

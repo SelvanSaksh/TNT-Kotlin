@@ -43,6 +43,7 @@ import core.storage.SessionManager
 import core.storage.getLocalStorage
 import utils.DeviceLocationProvider
 import kotlin.time.Clock
+import kotlin.time.ExperimentalTime
 
 private val Brand       = Color(0xFF133D63)
 private val BrandLight  = Color(0xFFE8EFF7)
@@ -65,6 +66,7 @@ private val client = HttpClient {
 private const val GEN_URL      = "https://dlhub.8aiku.com/gen/gen-barcode"
 private const val DOWNLOAD_URL = "https://dlhub.8aiku.com/gen/download-image"
 
+@OptIn(ExperimentalTime::class)
 @Composable
 fun CommonBarcodeScreen(
     barcodeType: DynamicBarcodeType,
@@ -132,23 +134,49 @@ fun CommonBarcodeScreen(
                 var city: String? = null
                 var state: String? = null
 
-                val locationPair = locationProvider.getCurrentLocation()
+                var locationPair: Pair<Double, Double>? = null
 
+                repeat(3) {
+                    locationPair = locationProvider.getCurrentLocation()
+                    println("📍 Attempt ${it + 1}: $locationPair")
+
+                    if (locationPair != null) return@repeat
+                    kotlinx.coroutines.delay(1000)
+                }
+
+                println("location: $locationPair")
                 if (locationPair != null) {
                     lat = locationPair.first
                     lon = locationPair.second
 
                     println("generate: $lat, $lon")
-                    val locationData = AppRepository
-                        .getLocationDetails(lat, lon)
-                        .getOrNull()
+                    val locationResult = AppRepository.getLocationDetails(lat, lon)
 
-                    city  = locationData?.city
-                    state = locationData?.state
+                    locationResult.onSuccess { locationData ->
+
+                        city  = locationData.city ?: "Unknown"
+                        state = locationData.state ?: "Unknown"
+                        print("📍 LOCATION FETCH SUCCESS: $locationData")
+                        println("🏙️ CITY: $city")
+                        println("🌍 STATE: $state")
+
+                    }.onFailure {
+                        println("❌ LOCATION FETCH FAILED: ${it.message}")
+
+                        // fallback (important)
+                        city = "Unknown"
+                        state = "Unknown"
+                    }
+                }
+
+                val companyId = sessionManager.getCompanyId()
+
+                if (companyId.isNullOrEmpty()) {
+                    println("❌ COMPANY ID MISSING")
+                    return@launch
                 }
 
 
-                // ✅ 3. Build Correct Audit Payload
                 val auditRequest = AuditLogRequest(
                     type = 1,
                     company_id = sessionManager.getCompanyId() ?: "",
@@ -157,8 +185,8 @@ fun CommonBarcodeScreen(
                     location_details = LocationDetailsPayload(
                         lat = lat,
                         long = lon,
-                        currentCity = city,
-                        state = state
+                        currentCity = city ?: "Unknown",
+                        state = state ?: "Unknown"
                     ),
 
                     details = AuditDetails(
@@ -166,12 +194,23 @@ fun CommonBarcodeScreen(
                         status = "generated",
                         barcodeType = barcodeType.displayName,
                         device = "Android",
-                        timestamp = ""
+                        timestamp = Clock.System.now().toString()
                     )
                 )
 
+                println("🚀 AUDIT REQUEST:")
+                println("barcode: ${input}")
+                println("type: ${barcodeType.displayName}")
+                println("lat: $lat, lon: $lon")
+
                 // ✅ 4. Send Audit Log
-                AppRepository.sendAuditLog(auditRequest)
+                val result = AppRepository.sendAuditLog(auditRequest)
+
+                if (result.isSuccess) {
+                    println("✅ AUDIT SUCCESS")
+                } else {
+                    println("❌ AUDIT FAILED: ${result.exceptionOrNull()?.message}")
+                }
 
             } catch (e: Exception) {
                 e.printStackTrace()

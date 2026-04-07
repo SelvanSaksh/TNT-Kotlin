@@ -49,8 +49,11 @@ data class Address(
     val town: String? = null,
     val village: String? = null,
     val state: String? = null,
+    val county: String? = null,
     val country: String? = null
-)
+) {
+}
+
 @kotlinx.serialization.Serializable
 data class LocationDatas(
     val latitude: Double,

@@ -79,13 +79,17 @@ object AppRepository {
                 endpoint = fullUrl
             )
 
+            val cityValue = response.address.city
+                ?: response.address.town
+                ?: response.address.village
+                ?: response.address.county
+                ?: response.display_name.split(",").firstOrNull()
+
             val location = LocationDatas(
                 latitude = latitude,
                 longitude = longitude,
                 displayName = response.display_name,
-                city = response.address.city
-                    ?: response.address.town
-                    ?: response.address.village,
+                city = cityValue,
                 state = response.address.state,
                 country = response.address.country
             )

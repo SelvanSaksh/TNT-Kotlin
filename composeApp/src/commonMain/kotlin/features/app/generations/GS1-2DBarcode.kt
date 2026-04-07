@@ -41,6 +41,15 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import core.network.models.AuditLogRequest
+import core.network.models.AuditDetails
+import core.network.models.LocationDetailsPayload
+import core.network.repository.AppRepository
+import core.storage.SessionManager
+import core.storage.getLocalStorage
+import utils.DeviceLocationProvider
+import kotlin.time.Clock
+import kotlin.time.ExperimentalTime
 
 @Serializable
 data class SingleBarcodeResponse(
@@ -169,6 +178,7 @@ private suspend fun generateBarcodeApi(
 private fun buildDownloadUrl(filename: String) =
     "$BASE_URL/download-image?folder_variable=TMP_IMAGE_FOLDER&filename=$filename"
 
+@OptIn(ExperimentalTime::class)
 @Composable
 fun GS12DBarcode(
     onBack: () -> Unit
@@ -200,6 +210,8 @@ fun GS12DBarcode(
     var showImageViewer by remember { mutableStateOf(false) }
 
     val coroutineScope = rememberCoroutineScope()
+    val sessionManager = SessionManager(getLocalStorage())
+    val locationProvider = remember { DeviceLocationProvider() }
 
     val allIndicators = listOf(
         "Batch Number", "Expiration Date", "Production Date",
@@ -479,12 +491,154 @@ fun GS12DBarcode(
                             isLoading = false
                             when (result) {
                                 is BarcodeResult.Single -> {
+
                                     barcodeImageUrls = listOf(result.url)
                                     showImageViewer = true
+
+                                    // 🔥 AUDIT LOG START
+                                    coroutineScope.launch {
+
+                                        var lat = 0.0
+                                        var lon = 0.0
+                                        var city: String? = null
+                                        var state: String? = null
+
+                                        var locationPair: Pair<Double, Double>? = null
+
+                                        repeat(3) {
+                                            locationPair = locationProvider.getCurrentLocation()
+                                            if (locationPair != null) return@repeat
+                                            kotlinx.coroutines.delay(1000)
+                                        }
+
+                                        if (locationPair != null) {
+                                            lat = locationPair!!.first
+                                            lon = locationPair!!.second
+
+                                            val locationResult = AppRepository.getLocationDetails(lat, lon)
+
+                                            locationResult.onSuccess {
+                                                city = it.city ?: "Unknown"
+                                                state = it.state ?: "Unknown"
+                                            }.onFailure {
+                                                city = "Unknown"
+                                                state = "Unknown"
+                                            }
+                                        }
+
+                                        val companyId = sessionManager.getCompanyId()
+                                        if (companyId.isNullOrEmpty()) {
+                                            println("❌ COMPANY ID MISSING")
+                                            return@launch
+                                        }
+
+                                        val auditRequest = AuditLogRequest(
+                                            type = 1,
+                                            company_id = companyId,
+                                            user_id = sessionManager.getUserId()?.toString() ?: "",
+                                            location_details = LocationDetailsPayload(
+                                                lat = lat,
+                                                long = lon,
+                                                currentCity = city,
+                                                state = state
+                                            ),
+                                            details = AuditDetails(
+                                                barcode = gs1Data, // 🔥 IMPORTANT
+                                                status = "generated",
+                                                barcodeType = selectedType,
+                                                device = "Android",
+                                                timestamp = Clock.System.now().toString()
+                                            )
+                                        )
+
+                                        val auditResult = AppRepository.sendAuditLog(auditRequest)
+
+                                        if (auditResult.isSuccess) {
+                                            println("✅ GS1 AUDIT SUCCESS")
+                                        } else {
+                                            println("❌ GS1 AUDIT FAILED: ${auditResult.exceptionOrNull()?.message}")
+                                        }
+                                    }
                                 }
                                 is BarcodeResult.Multiple -> {
+
                                     barcodeImageUrls = result.urls
                                     showImageViewer = true
+
+                                    // 🔥 AUDIT LOG START
+                                    coroutineScope.launch {
+
+                                        var lat = 0.0
+                                        var lon = 0.0
+                                        var city: String? = null
+                                        var state: String? = null
+
+                                        var locationPair: Pair<Double, Double>? = null
+
+                                        repeat(3) {
+                                            locationPair = locationProvider.getCurrentLocation()
+                                            println("📍 Attempt ${it + 1}: $locationPair")
+
+                                            if (locationPair != null) return@repeat
+                                            kotlinx.coroutines.delay(1000)
+                                        }
+
+                                        if (locationPair != null) {
+                                            lat = locationPair!!.first
+                                            lon = locationPair!!.second
+
+                                            val locationResult = AppRepository.getLocationDetails(lat, lon)
+
+                                            locationResult.onSuccess {
+                                                city = it.city ?: "Unknown"
+                                                state = it.state ?: "Unknown"
+
+                                                println("🏙️ CITY: $city")
+                                                println("🌍 STATE: $state")
+                                            }.onFailure {
+                                                println("❌ LOCATION FAILED: ${it.message}")
+                                                city = "Unknown"
+                                                state = "Unknown"
+                                            }
+                                        }
+
+                                        val companyId = sessionManager.getCompanyId()
+                                        if (companyId.isNullOrEmpty()) {
+                                            println("❌ COMPANY ID MISSING")
+                                            return@launch
+                                        }
+
+                                        val auditRequest = AuditLogRequest(
+                                            type = 1,
+                                            company_id = companyId,
+                                            user_id = sessionManager.getUserId()?.toString() ?: "",
+                                            location_details = LocationDetailsPayload(
+                                                lat = lat,
+                                                long = lon,
+                                                currentCity = city,
+                                                state = state
+                                            ),
+                                            details = AuditDetails(
+                                                barcode = gs1Data,
+                                                status = "generated",
+                                                barcodeType = selectedType,
+                                                device = "Android",
+                                                timestamp = Clock.System.now().toString()
+                                            )
+                                        )
+
+                                        println("🚀 MULTIPLE AUDIT REQUEST:")
+                                        println("📦 barcode: $gs1Data")
+                                        println("📍 lat: $lat, lon: $lon")
+
+                                        val auditResult = AppRepository.sendAuditLog(auditRequest)
+
+                                        if (auditResult.isSuccess) {
+                                            println("✅ MULTIPLE AUDIT SUCCESS")
+                                        } else {
+                                            println("❌ MULTIPLE AUDIT FAILED: ${auditResult.exceptionOrNull()?.message}")
+                                        }
+                                    }
                                 }
                                 is BarcodeResult.Failure -> {
                                     alertMessage = "Failed to generate barcode: ${result.message}"
