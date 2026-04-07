@@ -139,7 +139,7 @@ class ScannerActivity : ComponentActivity() {
 //            }
 //        )
         
-        scannerController?.startAuthScanner(this)
+        scannerController?.startAuthScanner(this, "", "")
     }
     
     private fun setupMultiScanner() {

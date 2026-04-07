@@ -1,7 +1,10 @@
 package features.app.scans
 
 import android.app.Activity
+import android.content.Intent
+import android.net.Uri
 import android.util.Log
+import android.widget.Toast
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -18,7 +21,10 @@ import com.example.scanner_sdk.customview.authandsingle.VerificationScannerView
 import com.example.scanner_sdk.customview.multi.view.MultiScannerView
 import com.example.scanner_sdk.customview.single.ScannerController
 import com.example.scanner_sdk.customview.single.view.SingleScannerView
+import dialog.AuthenticProductDialog
+import dialog.parseScanResponse
 import navigation.AppScreen
+import androidx.core.net.toUri
 
 
 @Composable
@@ -36,6 +42,8 @@ actual fun ScannerView(
         (context as androidx.fragment.app.FragmentActivity).supportFragmentManager
 
     var controller by remember { mutableStateOf<ScannerController?>(null) }
+    val jsonResponse = remember { mutableStateOf<String?>(null) }
+    val showAuthDialog = remember { mutableStateOf(false) }
 
     AndroidView(
         modifier = Modifier.fillMaxSize(),
@@ -52,10 +60,16 @@ actual fun ScannerView(
                         authScannerView = null,
                         lifecycleOwner = lifecycleOwner,
                         fragmentManager = fragmentManager,
-                        onScanned = onScanResult
+                        result = {
+                            jsonResponse.value = it.toString()
+                            showAuthDialog.value = true
+                        },
+                        error = {
+                            Toast.makeText(context, it, Toast.LENGTH_SHORT).show()
+                        }
                     )
 
-                    controller?.startVerifyScanner(ctx)
+                    controller?.startVerifyScanner(ctx, "1", "48")
                     view
                 }
 
@@ -68,7 +82,8 @@ actual fun ScannerView(
                         authScannerView = null,
                         lifecycleOwner = lifecycleOwner,
                         fragmentManager = fragmentManager,
-                        onScanned = onScanResult
+                        result = {},
+                        error = {}
                     )
 
                     controller?.startSingleScanner(ctx)
@@ -85,10 +100,11 @@ actual fun ScannerView(
                         authScannerView = view,
                         lifecycleOwner = lifecycleOwner,
                         fragmentManager = fragmentManager,
-                        onScanned = onScanResult
+                        result = {},
+                        error = {}
                     )
 
-                    controller?.startAuthScanner(ctx)
+                    controller?.startAuthScanner(ctx, "", "")
                     view
                 }
 
@@ -101,7 +117,8 @@ actual fun ScannerView(
                         authScannerView = null,
                         lifecycleOwner = lifecycleOwner,
                         fragmentManager = fragmentManager,
-                        onScanned = onScanResult
+                        result = {},
+                        error = {}
                     )
 
                     controller?.startMultiScanner(ctx)
@@ -112,6 +129,26 @@ actual fun ScannerView(
             }
         }
     )
+
+    if (showAuthDialog.value) {
+        jsonResponse.value?.let { json ->
+            parseScanResponse(jsonString = json)?.let { result ->
+                AuthenticProductDialog(
+                    result = result,
+                    onDismiss = { showAuthDialog.value = false },
+                    onContinue = {
+                        showAuthDialog.value = false
+                    },
+                    onLinkClick = {
+                        val intent = Intent(Intent.ACTION_VIEW, it.toUri())
+                        context.startActivity(intent)
+                    }
+                )
+
+            }
+
+        }
+    }
 
     DisposableEffect(scanMode) {
         onDispose {
