@@ -153,6 +153,7 @@ private val CardBg        = Color(0xFFF7F8FA)
 
 @Composable
 fun AuthenticProductDialog(
+    raw: String,
     result: ScanResult,
     onDismiss: () -> Unit = {},
     onContinue: () -> Unit = {},
@@ -312,7 +313,11 @@ fun AuthenticProductDialog(
                             color    = BlueLinkBg,
                             modifier = Modifier
                                 .fillMaxWidth()
-                                .clickable { onLinkClick(result.barcodeData) }
+                                .clickable {
+                                    if (raw.contains("http")) {
+                                        onLinkClick(result.barcodeData)
+                                    }
+                                }
                         ) {
                             Row(
                                 verticalAlignment = Alignment.CenterVertically,
@@ -329,7 +334,7 @@ fun AuthenticProductDialog(
                                 }
                                 Spacer(modifier = Modifier.width(10.dp))
                                 Text(
-                                    text     = result.barcodeData,
+                                    text     = if (raw.contains("http")) raw else result.barcodeData,
                                     color    = BlueLinkText,
                                     fontSize = 13.sp,
                                     maxLines = 2,
@@ -495,6 +500,7 @@ fun ProductVerificationScreen(rawJson: String) {
             }
             else -> {
                 AuthenticProductDialog(
+                    raw = "",
                     result     = result,
                     onDismiss  = { showDialog = false },
                     onContinue = { showDialog = false },

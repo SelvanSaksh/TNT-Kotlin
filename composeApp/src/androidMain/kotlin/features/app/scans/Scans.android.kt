@@ -1,8 +1,6 @@
 package features.app.scans
 
-import android.app.Activity
 import android.content.Intent
-import android.net.Uri
 import android.util.Log
 import android.widget.Toast
 import androidx.compose.foundation.layout.fillMaxSize
@@ -16,22 +14,21 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.core.net.toUri
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.scanner_sdk.customview.auth.AuthScannerView
 import com.example.scanner_sdk.customview.authandsingle.VerificationScannerView
 import com.example.scanner_sdk.customview.multi.view.MultiScannerView
 import com.example.scanner_sdk.customview.single.ScannerController
 import com.example.scanner_sdk.customview.single.view.SingleScannerView
-import dialog.AuthenticProductDialog
-import dialog.parseScanResponse
-import navigation.AppScreen
-import androidx.core.net.toUri
 import core.network.models.AuditDetails
 import core.network.models.AuditLogRequest
 import core.network.models.LocationDetailsPayload
 import core.network.repository.AppRepository
 import core.storage.SessionManager
 import core.storage.getLocalStorage
+import dialog.AuthenticProductDialog
+import dialog.parseScanResponse
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import utils.DeviceLocationProvider
@@ -61,6 +58,7 @@ actual fun ScannerView(
     var controller by remember { mutableStateOf<ScannerController?>(null) }
     val jsonResponse = remember { mutableStateOf<String?>(null) }
     var dialogTrigger by remember { mutableStateOf(0) }
+    var rawData by remember { mutableStateOf("") }
 
     AndroidView(
         modifier = Modifier.fillMaxSize(),
@@ -80,7 +78,8 @@ actual fun ScannerView(
 
                         result = { scanResult ->
 
-                            val scannedValue = scanResult.toString()
+                            rawData = scanResult.first
+                            val scannedValue = scanResult.second.toString()
                             println("📦 SCANNED VALUE: $scannedValue")
 
                             // Parse JSON
@@ -147,7 +146,7 @@ actual fun ScannerView(
 //                            showAuthDialog.value = true
 //                        },
                         error = {
-                            Toast.makeText(context, it, Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, it.second, Toast.LENGTH_SHORT).show()
                         }
                     )
 
@@ -203,7 +202,7 @@ actual fun ScannerView(
                         error = {}
                     )
 
-                    controller?.startMultiScanner(ctx)
+                    controller?.startMultiScanner(ctx, "1", "48")
                     view
                 }
 
@@ -216,6 +215,7 @@ actual fun ScannerView(
         jsonResponse.value?.let { json ->
             parseScanResponse(jsonString = json)?.let { result ->
                 AuthenticProductDialog(
+                    raw = rawData,
                     result = result,
                     onDismiss = { dialogTrigger = 0 },
                     onContinue = { dialogTrigger = 0 },

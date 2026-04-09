@@ -161,7 +161,7 @@ class ScannerActivity : ComponentActivity() {
 //            }
 //        )
         
-        scannerController?.startMultiScanner(this)
+        scannerController?.startMultiScanner(this, "1", "48")
     }
     
     private fun returnResult(scannedData: String) {
