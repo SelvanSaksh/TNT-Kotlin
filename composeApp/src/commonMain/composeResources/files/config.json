@@ -1,0 +1,68 @@
+{
+  "tables": [
+    { "name": "product_master", "alias": "p" },
+    { "name": "batch_master", "alias": "b" },
+    { "name": "invoice_details", "alias": "id" },
+    { "name": "invoice_master", "alias": "im" }
+  ],
+  "joins": [
+    {
+      "primaryTable": "product_master",
+      "primaryKey": "identifier",
+      "foreignTable": "batch_master",
+      "foreignKey": "gtin",
+      "type": "left",
+      "extraCondition": "b.batch_number = :batchNumber"
+    },
+    {
+      "primaryTable": "batch_master",
+      "primaryKey": "batch_number",
+      "foreignTable": "invoice_details",
+      "foreignKey": "batch_number",
+      "type": "left"
+    },
+    {
+      "primaryTable": "invoice_details",
+      "primaryKey": "invoice_id",
+      "foreignTable": "invoice_master",
+      "foreignKey": "invoice_id",
+      "type": "left"
+    }
+  ],
+  "filters": {
+    "gtin": "p.identifier = :gtin",
+    "batchNumber": "b.batch_number = :batchNumber"
+  },
+  "sections": {
+    "Basic Details": {
+      "Product Name": "p.product_name",
+      "GTIN": "p.identifier",
+      "Brand Name": "p.brand_name",
+      "Product Details": "p.product_desc",
+      "How To Use": "p.how_to_use",
+      "Composition": "p.composition",
+      "Schedule": "p.schedule",
+      "Dosage Form": "p.dosage_form",
+      "Side Effects": "p.side_effects"
+    },
+    "Batch Details": {
+      "Batch Number": "COALESCE(b.batch_number, 'N/A')",
+      "Manufacturing Date": "b.manufacturing_date",
+      "Expiry Date": "b.expiry_date",
+      "Batch Status": "COALESCE(b.batch_status, 'N/A')"
+    },
+    "Invoice Details": {
+      "Invoice Number": "COALESCE(im.comp_inv_no, 'N/A')",
+      "Customer Name": "COALESCE(im.customer_name, 'N/A')",
+      "Customer Address": "COALESCE(im.customer_address1, 'N/A')",
+      "Customer City": "COALESCE(im.customer_city, 'N/A')",
+      "Customer State": "COALESCE(im.customer_state, 'N/A')",
+      "Customer Country": "COALESCE(im.customer_country, 'N/A')",
+      "Invoice Date": "im.invoice_date",
+      "Total Amount": "im.total_amount"
+    },
+    "Allergen Info": {
+      "Allergen": "p.allergen_information"
+    }
+  }
+}

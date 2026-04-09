@@ -14,12 +14,13 @@ import androidx.fragment.app.FragmentActivity
 import core.storage.initAndroidContext
 import features.app.AppContextHolder
 import utils.PermissionType
+import utils.appContext
 
 class MainActivity : FragmentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
-        
+        appContext = applicationContext
         // Initialize Android context for LocalStorage
         initAndroidContext(this)
         AppContextHolder.context = applicationContext

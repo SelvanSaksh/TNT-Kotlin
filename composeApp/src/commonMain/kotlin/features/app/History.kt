@@ -27,7 +27,7 @@ import core.storage.getLocalStorage
 import kotlinx.datetime.*
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
-
+import utils.openUrl
 // ── Colors ────────────────────────────────────────────────────────────────────
 private val PageBg        = Color(0xFFF5F6FA)
 private val TextPrimary   = Color(0xFF111827)
@@ -377,12 +377,17 @@ fun HistoryRowItem(item: HistoryItemUi) {
             modifier = Modifier.weight(1f),
             verticalArrangement = Arrangement.spacedBy(4.dp)
         ) {
+            val isUrl = item.fileName.startsWith("http")
+
             Text(
-                text       = item.fileName,
-                fontSize   = 14.sp,
+                text = item.fileName,
+                fontSize = 14.sp,
                 fontWeight = FontWeight.SemiBold,
-                color      = TextPrimary,
-                maxLines   = 1
+                color = if (isUrl) Color(0xFF2563EB) else TextPrimary,
+                maxLines = 1,
+                modifier = Modifier.clickable(enabled = isUrl) {
+                    openUrl(item.fileName)
+                }
             )
             Row(
                 verticalAlignment = Alignment.CenterVertically,

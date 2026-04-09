@@ -11,6 +11,7 @@ import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
@@ -25,14 +26,30 @@ import dialog.AuthenticProductDialog
 import dialog.parseScanResponse
 import navigation.AppScreen
 import androidx.core.net.toUri
+import core.network.models.AuditDetails
+import core.network.models.AuditLogRequest
+import core.network.models.LocationDetailsPayload
+import core.network.repository.AppRepository
+import core.storage.SessionManager
+import core.storage.getLocalStorage
+import kotlinx.coroutines.launch
+import org.json.JSONArray
+import utils.DeviceLocationProvider
+import kotlin.time.Clock
+import kotlin.time.ExperimentalTime
 
 
+@OptIn(ExperimentalTime::class)
 @Composable
 actual fun ScannerView(
     scanMode: String,
     onScanResult: (String) -> Unit,
     onNavigate: (String) -> Unit
 ) {
+
+    val sessionManager = SessionManager(getLocalStorage())
+    val locationProvider = DeviceLocationProvider()
+    val scope = rememberCoroutineScope()
 
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -43,7 +60,7 @@ actual fun ScannerView(
 
     var controller by remember { mutableStateOf<ScannerController?>(null) }
     val jsonResponse = remember { mutableStateOf<String?>(null) }
-    val showAuthDialog = remember { mutableStateOf(false) }
+    var dialogTrigger by remember { mutableStateOf(0) }
 
     AndroidView(
         modifier = Modifier.fillMaxSize(),
@@ -60,10 +77,75 @@ actual fun ScannerView(
                         authScannerView = null,
                         lifecycleOwner = lifecycleOwner,
                         fragmentManager = fragmentManager,
-                        result = {
-                            jsonResponse.value = it.toString()
-                            showAuthDialog.value = true
+
+                        result = { scanResult ->
+
+                            val scannedValue = scanResult.toString()
+                            println("📦 SCANNED VALUE: $scannedValue")
+
+                            // Parse JSON
+                            val jsonArray = JSONArray(scannedValue)
+                            val barcodeData = jsonArray.getJSONObject(0).getString("barcode_data")
+
+                            println("📦 barcodeData VALUE: $barcodeData")
+
+                            jsonResponse.value = scannedValue
+                            dialogTrigger++
+
+                            scope.launch {
+
+                                var lat = 0.0
+                                var lon = 0.0
+                                var city: String? = null
+                                var state: String? = null
+
+                                val locationPair = locationProvider.getCurrentLocation()
+
+                                if (locationPair != null) {
+                                    lat = locationPair.first
+                                    lon = locationPair.second
+
+                                    val locationResult = AppRepository.getLocationDetails(lat, lon)
+
+                                    locationResult.onSuccess {
+                                        city = it.city ?: "Unknown"
+                                        state = it.state ?: "Unknown"
+                                    }.onFailure {
+                                        city = "Unknown"
+                                        state = "Unknown"
+                                    }
+                                }
+
+                                val companyId = sessionManager.getCompanyId()
+                                if (companyId.isNullOrEmpty()) return@launch
+
+                                val auditRequest = AuditLogRequest(
+                                    type = 0,
+                                    company_id = companyId,
+                                    user_id = sessionManager.getUserId()?.toString() ?: "",
+                                    location_details = LocationDetailsPayload(
+                                        lat = lat,
+                                        long = lon,
+                                        currentCity = city,
+                                        state = state
+                                    ),
+                                    details = AuditDetails(
+                                        barcode = scannedValue,
+                                        status = "scanned",
+                                        barcodeType = "Scan",
+                                        device = "Android",
+                                        timestamp = Clock.System.now().toString()
+                                    )
+                                )
+
+                                AppRepository.sendAuditLog(auditRequest)
+                            }
                         },
+
+//                        result = {
+//                            jsonResponse.value = it.toString()
+//                            showAuthDialog.value = true
+//                        },
                         error = {
                             Toast.makeText(context, it, Toast.LENGTH_SHORT).show()
                         }
@@ -130,15 +212,13 @@ actual fun ScannerView(
         }
     )
 
-    if (showAuthDialog.value) {
+    if (scanMode == "VERIFY" && dialogTrigger > 0) {
         jsonResponse.value?.let { json ->
             parseScanResponse(jsonString = json)?.let { result ->
                 AuthenticProductDialog(
                     result = result,
-                    onDismiss = { showAuthDialog.value = false },
-                    onContinue = {
-                        showAuthDialog.value = false
-                    },
+                    onDismiss = { dialogTrigger = 0 },
+                    onContinue = { dialogTrigger = 0 },
                     onLinkClick = {
                         val intent = Intent(Intent.ACTION_VIEW, it.toUri())
                         context.startActivity(intent)
