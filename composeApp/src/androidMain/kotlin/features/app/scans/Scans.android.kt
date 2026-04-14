@@ -1,8 +1,11 @@
 package features.app.scans
 
 import android.content.Intent
+import android.net.Uri
 import android.util.Log
 import android.widget.Toast
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
@@ -35,7 +38,6 @@ import utils.DeviceLocationProvider
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
 
-
 @OptIn(ExperimentalTime::class)
 @Composable
 actual fun ScannerView(
@@ -46,6 +48,7 @@ actual fun ScannerView(
 
     val sessionManager = SessionManager(getLocalStorage())
     val locationProvider = DeviceLocationProvider()
+
     val scope = rememberCoroutineScope()
 
     val context = LocalContext.current
@@ -59,6 +62,18 @@ actual fun ScannerView(
     val jsonResponse = remember { mutableStateOf<String?>(null) }
     var dialogTrigger by remember { mutableStateOf(0) }
     var rawData by remember { mutableStateOf("") }
+    // ✅ Step 1 — Declare the launcher
+    val galleryLauncher = rememberLauncherForActivityResult(
+        contract = ActivityResultContracts.GetContent()
+    ) { uri: Uri? ->
+        uri ?: return@rememberLauncherForActivityResult
+        controller?.processGalleryImage(
+            context = context,
+            uri = uri,
+            userId = "1",
+            companyId = "48",
+        )
+    }
 
     AndroidView(
         modifier = Modifier.fillMaxSize(),
@@ -75,7 +90,7 @@ actual fun ScannerView(
                         authScannerView = null,
                         lifecycleOwner = lifecycleOwner,
                         fragmentManager = fragmentManager,
-
+                        openGallery = { galleryLauncher.launch("image/*") },
                         result = { scanResult ->
 
                             rawData = scanResult.first
@@ -146,7 +161,7 @@ actual fun ScannerView(
 //                            showAuthDialog.value = true
 //                        },
                         error = {
-                            Toast.makeText(context, it.second, Toast.LENGTH_SHORT).show()
+                            Toast.makeText(context, "Error data received : ${it.second}", Toast.LENGTH_SHORT).show()
                         }
                     )
 
@@ -163,6 +178,7 @@ actual fun ScannerView(
                         authScannerView = null,
                         lifecycleOwner = lifecycleOwner,
                         fragmentManager = fragmentManager,
+                        openGallery = { galleryLauncher.launch("image/*") },
                         result = {},
                         error = {}
                     )
@@ -181,6 +197,7 @@ actual fun ScannerView(
                         authScannerView = view,
                         lifecycleOwner = lifecycleOwner,
                         fragmentManager = fragmentManager,
+                        openGallery = { galleryLauncher.launch("image/*") },
                         result = {},
                         error = {}
                     )
@@ -198,6 +215,7 @@ actual fun ScannerView(
                         authScannerView = null,
                         lifecycleOwner = lifecycleOwner,
                         fragmentManager = fragmentManager,
+                        openGallery = { galleryLauncher.launch("image/*") },
                         result = {},
                         error = {}
                     )

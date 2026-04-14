@@ -40,7 +40,7 @@ kotlin {
             implementation(compose.preview)
             implementation(libs.androidx.activity.compose)
 
-            implementation("com.github.Gowthamgsv32:scanner-sdk:1.9.7")
+            implementation("com.github.Gowthamgsv32:scanner-sdk:1.9.8")
             implementation("androidx.constraintlayout:constraintlayout:2.2.1")
             implementation("androidx.fragment:fragment-ktx:1.8.9")
             implementation("com.google.android.material:material:1.13.0")
