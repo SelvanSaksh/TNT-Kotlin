@@ -20,6 +20,7 @@ import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.net.toUri
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.scanner_sdk.customview.auth.AuthScannerView
+import com.example.scanner_sdk.customview.authandsingle.CommonScannerView
 import com.example.scanner_sdk.customview.authandsingle.VerificationScannerView
 import com.example.scanner_sdk.customview.multi.view.MultiScannerView
 import com.example.scanner_sdk.customview.single.ScannerController
@@ -82,11 +83,12 @@ actual fun ScannerView(
             when (scanMode) {
 
                 "VERIFY" -> {
-                    val view = VerificationScannerView(ctx)
+                    val view = CommonScannerView(ctx)
                     controller = ScannerController(
                         singleScannerView = null,
-                        verificationScannerView = view,
-                        multiScannerView = null,
+                        verificationScanner = null,
+                        commonScannerView = view,
+                        multiScanner = null,
                         authScannerView = null,
                         lifecycleOwner = lifecycleOwner,
                         fragmentManager = fragmentManager,
@@ -165,7 +167,7 @@ actual fun ScannerView(
                         }
                     )
 
-                    controller?.startVerifyScanner(ctx, "1", "48")
+                    controller?.startCommonScanner(ctx, "1", "48")
                     view
                 }
 
@@ -174,7 +176,7 @@ actual fun ScannerView(
                     Log.d("SCANNERLOG", "ScannerView: Single CALLED//////////////")
                     controller = ScannerController(
                         singleScannerView = view,
-                        multiScannerView = null,
+                        multiScanner = null,
                         authScannerView = null,
                         lifecycleOwner = lifecycleOwner,
                         fragmentManager = fragmentManager,
@@ -193,7 +195,7 @@ actual fun ScannerView(
                     Log.d("SCANNERLOG", "ScannerView: AUTHCALLED//////////////")
                     controller = ScannerController(
                         singleScannerView = null,
-                        multiScannerView = null,
+                        multiScanner = null,
                         authScannerView = view,
                         lifecycleOwner = lifecycleOwner,
                         fragmentManager = fragmentManager,
@@ -211,7 +213,7 @@ actual fun ScannerView(
                     Log.d("SCANNERLOG", "ScannerView: Multi CALLED//////////////")
                     controller = ScannerController(
                         singleScannerView = null,
-                        multiScannerView = view,
+                        multiScanner = view,
                         authScannerView = null,
                         lifecycleOwner = lifecycleOwner,
                         fragmentManager = fragmentManager,

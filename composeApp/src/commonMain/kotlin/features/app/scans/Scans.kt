@@ -183,7 +183,7 @@ fun Scans(
             )
         }
 
-        Box(
+/*        Box(
             modifier = Modifier
                 .padding(bottom = 12.dp)
                 .align(Alignment.BottomCenter)
@@ -195,7 +195,7 @@ fun Scans(
                     showResult = false
                 }
             )
-        }
+        }*/
     }
 }
 
