@@ -14,19 +14,19 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.*
-import io.ktor.client.*
-import io.ktor.client.call.*
-import io.ktor.client.plugins.contentnegotiation.*
-import io.ktor.client.request.*
-import io.ktor.serialization.kotlinx.json.*
 import kotlinx.coroutines.launch
 import kotlinx.serialization.*
 import kotlinx.serialization.json.*
+import kotlinx.serialization.json.contentOrNull
 import core.storage.SessionManager
 import core.storage.getLocalStorage
-import kotlinx.datetime.*
+import features.app.barcodeLogDisplayAction
+import features.app.barcodeLogDisplayTitle
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.toLocalDateTime
+import network.ApiClient
 import utils.openUrl
 // ── Colors ────────────────────────────────────────────────────────────────────
 private val PageBg        = Color(0xFFF5F6FA)
@@ -39,24 +39,6 @@ private val BorderColor   = Color(0xFFE5E7EB)
 private val IconBg        = Color(0xFFEFF6FF)
 
 // ── Models ────────────────────────────────────────────────────────────────────
-@Serializable
-data class HistoryLog(
-    val type: Int = 0,
-    val details: HistoryDetails? = null,
-    val created_at: String = ""
-)
-
-@Serializable
-data class HistoryDetails(
-    val barcode: String? = null,
-    val status: String? = null
-)
-
-@Serializable
-data class HistoryResponse(
-    val data: List<HistoryLog> = emptyList()
-)
-
 data class HistoryItemUi(
     val id: String,
     val fileName: String,
@@ -71,7 +53,13 @@ enum class HistoryTab { Scans, Generations }
 @Composable
 fun History() {
     val sessionManager = remember { SessionManager(getLocalStorage()) }
-    val accessToken    = sessionManager.getAccessToken() ?: ""
+    val json = remember { Json { ignoreUnknownKeys = true } }
+    val userDetail = remember {
+        sessionManager.getUserDetail()?.let {
+            try { json.decodeFromString<network.models.UserDetail>(it) } catch (_: Exception) { null }
+        }
+    }
+    val companyId = userDetail?.companyId ?: 0
     val scope          = rememberCoroutineScope()
 
     var selectedTab  by remember { mutableStateOf(HistoryTab.Scans) }
@@ -93,33 +81,36 @@ fun History() {
         scope.launch {
             isLoading = true
             try {
-                val type = if (selectedTab == HistoryTab.Scans) 0 else 1
-                val client = HttpClient {
-                    install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) }
+                if (companyId <= 0) {
+                    items = emptyList()
+                    return@launch
                 }
-                val response: HistoryResponse = client.get(
-                    "https://api.tnt.sakksh.com/companies/barcode/logs"
-                ) {
-                    parameter("type", type)
-                    parameter("page", 1)
-                    parameter("limit", 10)
-                    header("Authorization", "Bearer $accessToken")
-                }.body()
-                client.close()
 
-                items = response.data.mapIndexedNotNull { index, log ->
-                    val barcode = log.details?.barcode ?: return@mapIndexedNotNull null
-                    val status  = log.details.status  ?: return@mapIndexedNotNull null
+                val typeParam = if (selectedTab == HistoryTab.Scans) "scanning" else "generation"
+                val response = ApiClient.get<JsonObject>(
+                    endpoint = "/companies/barcode/logs?company_id=$companyId&type=$typeParam&page=1&limit=50"
+                )
+
+                val rows = response.optArray("data")
+                    .sortedByDescending {
+                        parseAuditInstant(
+                            it.optString("created_at", it.optString("event_time"))
+                        ) ?: Instant.DISTANT_PAST
+                    }
+
+                val isGeneration = selectedTab == HistoryTab.Generations
+                items = rows.mapIndexed { index, log ->
                     HistoryItemUi(
                         id           = index.toString(),
-                        fileName     = barcode,
-                        action       = status,
-                        timeAgo      = log.created_at,
-                        isGeneration = log.type != 0
+                        fileName     = log.barcodeLogDisplayTitle(),
+                        action       = log.barcodeLogDisplayAction(),
+                        timeAgo      = formatTimeAgo(log.optString("created_at", log.optString("event_time"))),
+                        isGeneration = isGeneration
                     )
                 }
             } catch (e: Exception) {
                 println("History error: ${e.message}")
+                items = emptyList()
             }
             isLoading = false
         }
@@ -165,7 +156,6 @@ fun HistoryHeader() {
             modifier = Modifier
                 .fillMaxWidth()
                 .padding(horizontal = 16.dp, vertical = 16.dp),
-            horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
             Text(
@@ -174,18 +164,6 @@ fun HistoryHeader() {
                 fontWeight = FontWeight.Bold,
                 color      = TextPrimary
             )
-            Box(
-                modifier = Modifier
-                    .background(BlueBg, RoundedCornerShape(20.dp))
-                    .padding(horizontal = 18.dp, vertical = 8.dp)
-            ) {
-                Text(
-                    text       = "Upgrade",
-                    fontSize   = 14.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color      = BlueAccent
-                )
-            }
         }
     }
 }
@@ -549,3 +527,37 @@ fun HistorySkeletonList() {
         }
     }
 }
+
+private fun parseAuditInstant(raw: String): Instant? {
+    if (raw.isBlank()) return null
+    val normalized = when {
+        raw.contains("T") && (raw.endsWith("Z") || raw.contains("+")) -> raw
+        raw.contains("T") -> "${raw}Z"
+        raw.contains(" ") -> raw.replace(" ", "T") + "Z"
+        else -> "${raw}T00:00:00Z"
+    }
+    return runCatching { Instant.parse(normalized) }.getOrNull()
+}
+
+private fun formatTimeAgo(dateString: String): String {
+    val instant = parseAuditInstant(dateString) ?: return "recently"
+    val now = Clock.System.now()
+    val diffSeconds = (now - instant).inWholeSeconds
+
+    return when {
+        diffSeconds < 60 -> "just now"
+        diffSeconds < 3600 -> "${diffSeconds / 60} mins ago"
+        diffSeconds < 86400 -> "${diffSeconds / 3600} hrs ago"
+        diffSeconds < 604800 -> "${diffSeconds / 86400} days ago"
+        else -> instant.toLocalDateTime(TimeZone.currentSystemDefault()).date.toString()
+    }
+}
+
+private fun JsonObject.optObj(key: String): JsonObject =
+    this[key]?.jsonObject ?: JsonObject(emptyMap())
+
+private fun JsonObject.optArray(key: String): List<JsonObject> =
+    (this[key] as? JsonArray)?.mapNotNull { it as? JsonObject } ?: emptyList()
+
+private fun JsonObject.optString(key: String, fallback: String = ""): String =
+    this[key]?.jsonPrimitive?.contentOrNull ?: fallback

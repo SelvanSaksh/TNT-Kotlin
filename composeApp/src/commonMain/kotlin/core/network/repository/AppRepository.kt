@@ -3,8 +3,10 @@ import core.network.models.AuditLogRequest
 import core.network.models.AuditLogResponse
 import core.network.models.BarcodeResponse
 import core.network.models.FetchAi
+import core.network.models.GenerationLogRequest
 import core.network.models.LocationDatas
 import core.network.models.NominatimResponse
+import core.network.models.ScanLogCreateRequest
 import network.ApiClient
 import io.ktor.http.*
 
@@ -60,6 +62,34 @@ object AppRepository {
 
             Result.success(Unit)
 
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun sendScanCreateLog(
+        body: ScanLogCreateRequest
+    ): Result<Unit> {
+        return try {
+            ApiClient.post<ScanLogCreateRequest, AuditLogResponse>(
+                endpoint = "/companies/barcode/create",
+                payload = body
+            )
+            Result.success(Unit)
+        } catch (e: Exception) {
+            Result.failure(e)
+        }
+    }
+
+    suspend fun sendGenerationLog(
+        body: GenerationLogRequest
+    ): Result<Unit> {
+        return try {
+            ApiClient.post<GenerationLogRequest, AuditLogResponse>(
+                endpoint = "/companies/barcode/generation",
+                payload = body
+            )
+            Result.success(Unit)
         } catch (e: Exception) {
             Result.failure(e)
         }

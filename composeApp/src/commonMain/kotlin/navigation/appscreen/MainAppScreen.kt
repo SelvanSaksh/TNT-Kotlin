@@ -1,6 +1,5 @@
 package features.app
 
-import UpgradeView
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.*
@@ -10,7 +9,7 @@ import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Person
 import androidx.compose.material.icons.outlined.History
 import androidx.compose.material.icons.outlined.QrCodeScanner
-import androidx.compose.material.icons.outlined.RocketLaunch
+import androidx.compose.material.icons.outlined.BarChart
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -37,13 +36,6 @@ data class BottomTab(
     val icon: ImageVector
 )
 
-private val bottomTabs = listOf(
-    BottomTab(AppScreen.Home,    "Home",    Icons.Filled.Home),
-    BottomTab(AppScreen.History, "History", Icons.Outlined.History),
-    BottomTab(AppScreen.Scan,    "",    Icons.Outlined.QrCodeScanner),
-    BottomTab(AppScreen.Upgrade, "Upgrade", Icons.Outlined.RocketLaunch),
-    BottomTab(AppScreen.Profile, "Profile", Icons.Filled.Person),
-)
 @Composable
 fun MainAppScreen(
     initialTab: AppScreen = AppScreen.Home,
@@ -53,7 +45,6 @@ fun MainAppScreen(
 
     val sessionManager = remember { SessionManager(getLocalStorage()) }
     val json = remember { Json { ignoreUnknownKeys = true } }
-    val scope = rememberCoroutineScope()
 
     val userDetail = remember {
         sessionManager.getUserDetail()?.let {
@@ -77,26 +68,34 @@ fun MainAppScreen(
                 .padding(innerPadding)
         ) {
             when (activeTab) {
-                AppScreen.Home    -> Home(onNavigate = onNavigate)
+                AppScreen.Home    -> Home(
+                    onNavigate = onNavigate,
+                    onHistoryClick = { activeTab = AppScreen.History }
+                )
                 AppScreen.History -> features.app.history.History()
                 AppScreen.Scan    -> Scans(onNavigate = {})/*ScannerView(
                     scanMode = "VERIFY",
                     onNavigate = {},
                     onScanResult = {}
                 )*/
-                AppScreen.Upgrade -> UpgradeView(
-
-                )
+                AppScreen.Analytics -> AnalyticsScreen()
                 AppScreen.Profile -> features.profile.ProfileScreen(
                     userName = userDetail?.firstName,
                     email = userDetail?.email,
                     role = userDetail?.role,
                     onNavigate = {},
+                    onNavigateToSubscription = {
+                        onNavigate(Screens.SubscriptionScreen)
+                    },
                     onLogout = {
-                        onNavigate(Screens.LoginScreen) // or handle logout
+                        sessionManager.clearSession()
+                        onNavigate(Screens.LoginScreen)
                     }
                 )
-                else              -> Home(onNavigate = onNavigate)
+                else              -> Home(
+                    onNavigate = onNavigate,
+                    onHistoryClick = { activeTab = AppScreen.History }
+                )
             }
         }
     }
@@ -108,7 +107,7 @@ fun BottomNavBar(
 ) {
     val leftTabs  = listOf(BottomTab(AppScreen.Home,    "Home",    Icons.Filled.Home),
         BottomTab(AppScreen.History, "History", Icons.Outlined.History))
-    val rightTabs = listOf(BottomTab(AppScreen.Upgrade, "Upgrade", Icons.Outlined.RocketLaunch),
+    val rightTabs = listOf(BottomTab(AppScreen.Analytics, "Analytics", Icons.Outlined.BarChart),
         BottomTab(AppScreen.Profile, "Profile", Icons.Filled.Person))
 
     Box(
@@ -249,13 +248,6 @@ fun HistoryPlaceholder() {
 fun ScanPlaceholder() {
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
         Text("Scan Screen")
-    }
-}
-
-@Composable
-fun UpgradePlaceholder() {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Text("Upgrade Screen")
     }
 }
 

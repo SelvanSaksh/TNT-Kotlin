@@ -6,7 +6,7 @@ import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -27,12 +27,10 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
-import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Description
 import androidx.compose.material.icons.filled.ExitToApp
 import androidx.compose.material.icons.filled.MoreVert
 import androidx.compose.material.icons.filled.Notifications
-import androidx.compose.material.icons.filled.PersonAdd
 import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Settings
@@ -66,19 +64,27 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import core.storage.SessionManager
 import core.storage.getLocalStorage
-import io.ktor.client.HttpClient
-import io.ktor.client.call.body
-import io.ktor.client.plugins.contentnegotiation.ContentNegotiation
-import io.ktor.client.request.get
-import io.ktor.client.request.header
-import io.ktor.client.request.parameter
-import io.ktor.serialization.kotlinx.json.json
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import network.ApiClient
 import navigation.appscreen.Screens
 import network.models.UserDetail
 import theme.White
+import utils.openUrl
+import kotlinx.datetime.Clock
+import kotlinx.datetime.DayOfWeek
+import kotlinx.datetime.Instant
+import kotlinx.datetime.TimeZone
+import kotlinx.datetime.toLocalDateTime
 
 // ── Colors from Swift ────────────────────────────────────────────────────────
 private val NavyDark     = Color(0xFF163C66)
@@ -88,11 +94,6 @@ private val PageBg       = Color(0xFFF5F6FA)
 private val TextPrimary  = Color(0xFF111827)
 private val TextMuted    = Color(0xFF9CA3AF)
 private val TextSub      = Color(0xFF374151)
-private val GreenAccent  = Color(0xFF059669)
-private val GreenBg      = Color(0xFFF0FDF4)
-private val GreenBorder  = Color(0xFFBBF7D0)
-private val GreenIcon    = Color(0xFFD1FAE5)
-
 // ── API Models ───────────────────────────────────────────────────────────────
 @Serializable
 data class BarcodeLog(
@@ -120,7 +121,10 @@ data class HistoryItem(
 )
 
 @Composable
-fun Home(onNavigate: (Screens) -> Unit) {
+fun Home(
+    onNavigate: (Screens) -> Unit,
+    onHistoryClick: () -> Unit = {}
+) {
 
     val sessionManager = remember { SessionManager(getLocalStorage()) }
     val json = remember { Json { ignoreUnknownKeys = true } }
@@ -133,7 +137,6 @@ fun Home(onNavigate: (Screens) -> Unit) {
     }
     val userName     = userDetail?.firstName ?: "User"
     val companyId    = userDetail?.companyId ?: 0
-    val accessToken  = sessionManager.getAccessToken() ?: ""
 
     var triggerScan       by remember { mutableStateOf(false) }
     var showLogoutDialog  by remember { mutableStateOf(false) }
@@ -141,49 +144,115 @@ fun Home(onNavigate: (Screens) -> Unit) {
     var totalScans        by remember { mutableStateOf(0) }
     var totalGenerations  by remember { mutableStateOf(0) }
     var weeklyData        by remember { mutableStateOf(List(7) { 0f }) }
+    var weeklyCounts      by remember { mutableStateOf(List(7) { 0 }) }
     var recentItems       by remember { mutableStateOf<List<HistoryItem>>(emptyList()) }
 
     // ── Fetch dashboard ───────────────────────────────────────────────────────
     LaunchedEffect(Unit) {
+        val rawSubscription = sessionManager.getSubscriptionData().orEmpty()
+        val prettySubscription = if (rawSubscription.isBlank()) {
+            "{}"
+        } else {
+            runCatching {
+                val element = Json.parseToJsonElement(rawSubscription)
+                Json { prettyPrint = true; prettyPrintIndent = "  " }
+                    .encodeToString(JsonElement.serializer(), element)
+            }.getOrElse { rawSubscription }
+        }
+        println("SUBSCRIPTION_LOG_JSON:\n$prettySubscription")
+
+        val assignedLocations = userDetail?.locations.orEmpty()
+        println("LOCATION_LOG: assigned locations count=${assignedLocations.size}")
+        assignedLocations.forEachIndexed { index, assigned ->
+            println(
+                "LOCATION_LOG: assigned[$index] locationId=${assigned.locationId} assignmentType=${assigned.assignmentType.orEmpty()}"
+            )
+        }
+
+        val rawLocationDetails = sessionManager.getLocationDetails().orEmpty()
+        val prettyLocationDetails = if (rawLocationDetails.isBlank()) {
+            "[]"
+        } else {
+            runCatching {
+                val element = Json.parseToJsonElement(rawLocationDetails)
+                Json { prettyPrint = true; prettyPrintIndent = "  " }
+                    .encodeToString(JsonElement.serializer(), element)
+            }.getOrElse { rawLocationDetails }
+        }
+        println("LOCATION_DETAILS_LOG_JSON:\n$prettyLocationDetails")
+
+        runCatching {
+            val locationDetails = Json.parseToJsonElement(rawLocationDetails).jsonArray
+            locationDetails.forEachIndexed { index, element ->
+                val item = element.jsonObject
+                val location = item.optObj("location")
+                println(
+                    "LOCATION_LOG: detail[$index] " +
+                        "locationId=${item.optInt("locationId")} " +
+                        "assignmentType=${item.optString("assignmentType")} " +
+                        "name=${location.optString("locn_name")} " +
+                        "city=${location.optString("locn_city")} " +
+                        "sgln=${location.optString("locn_sgln")} " +
+                        "lat=${location.optString("lat")} " +
+                        "long=${location.optString("long")}"
+                )
+            }
+        }.onFailure {
+            if (rawLocationDetails.isNotBlank()) {
+                println("LOCATION_LOG: failed to parse stored location_details: ${it.message}")
+            }
+        }
+
         scope.launch {
             isLoading = true
             try {
-                val client = HttpClient {
-                    install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) }
+                if (companyId <= 0) {
+                    totalScans = 0
+                    totalGenerations = 0
+                    weeklyData = List(7) { 0f }
+                    weeklyCounts = List(7) { 0 }
+                    recentItems = emptyList()
+                    return@launch
                 }
-                val response: BarcodeLogsResponse = client.get(
-                    "https://api.tnt.sakksh.com/companies/barcode/logs"
-                ) {
-                    parameter("company_id", companyId)
-                    parameter("page", 1)
-                    parameter("limit", 20)
-                    header("Authorization", "Bearer $accessToken")
-                }.body()
-                client.close()
 
-                var scans = 0; var gens = 0
-                val dailyCounts = mutableMapOf<Int, Int>()
-                val mapped = response.data.map { log ->
-                    if (log.type == 0) scans++ else gens++
-                    val weekday = getWeekday(log.created_at)
-                    dailyCounts[weekday] = (dailyCounts[weekday] ?: 0) + 1
+                val summary = ApiClient.get<JsonObject>(
+                    endpoint = "/companies/barcode/dashboard-summary?company_id=$companyId&recent_limit=15"
+                )
+
+                val countFields = summary.optObj("counts")
+                val scanningCount = countFields.optInt("scanning")
+                val generationCount = countFields.optInt("generation")
+
+                val recent = summary.optObj("recent")
+                val scanLogs = recent.optArray("scanning")
+                val generationLogs = recent.optArray("generation")
+                val mergedLogs = (scanLogs.map { it to false } + generationLogs.map { it to true })
+                    .sortedByDescending { parseAuditInstant(it.first.optString("created_at", it.first.optString("event_time"))) }
+
+                val topRecent = mergedLogs.take(5).map { (log, isGeneration) ->
                     HistoryItem(
-                        fileName   = log.details?.barcode ?: "Unknown",
-                        action     = log.details?.status ?: "Processed",
-                        timeAgo    = formatTimeAgo(log.created_at),
-                        isGeneration = log.type != 0
+                        fileName = log.barcodeLogDisplayTitle(),
+                        action = log.barcodeLogDisplayAction(),
+                        timeAgo = formatTimeAgo(log.optString("created_at", log.optString("event_time"))),
+                        isGeneration = isGeneration
                     )
                 }
 
-                val chartRaw = (1..7).map { (dailyCounts[it] ?: 0).toFloat() }
-                val maxVal = chartRaw.maxOrNull()?.takeIf { it > 0 } ?: 1f
+                val chartLogs = scanLogs + generationLogs
+                val counts = weekActivityCounts(chartLogs)
 
-                totalScans       = scans
-                totalGenerations = gens
-                weeklyData       = chartRaw.map { it / maxVal }
-                recentItems      = mapped.take(5)
+                totalScans = scanningCount
+                totalGenerations = generationCount
+                weeklyCounts = counts
+                weeklyData = normalizedWeekBarsFromCounts(counts)
+                recentItems = topRecent
             } catch (e: Exception) {
                 println("Dashboard error: ${e.message}")
+                totalScans = 0
+                totalGenerations = 0
+                weeklyData = List(7) { 0f }
+                weeklyCounts = List(7) { 0 }
+                recentItems = emptyList()
             }
             isLoading = false
         }
@@ -220,9 +289,17 @@ fun Home(onNavigate: (Screens) -> Unit) {
             ) {
                 HeroBanner(onNavigate = onNavigate)
                 StatsRow(isLoading, totalScans, totalGenerations)
-                ActivityOverview(isLoading, totalScans + totalGenerations, weeklyData)
-                RecentHistory(isLoading, recentItems)
-                UpgradeBanner()
+                ActivityOverview(
+                    isLoading = isLoading,
+                    totalActions = totalScans + totalGenerations,
+                    weeklyData = weeklyData,
+                    weeklyCounts = weeklyCounts
+                )
+                RecentHistory(
+                    isLoading = isLoading,
+                    items = recentItems,
+                    onSeeAllClick = onHistoryClick
+                )
             }
         }
 
@@ -436,9 +513,18 @@ fun SkeletonCard(modifier: Modifier = Modifier) {
 }
 
 // ── Activity Overview ─────────────────────────────────────────────────────────
+private val ChartTrackBg = Color(0xFFF3F4F6)
+private val ChartBarIdle = Color(0xFFE5E7EB)
+private val ChartAccent = Color(0xFF2563EB)
+
 @Composable
-fun ActivityOverview(isLoading: Boolean, totalActions: Int, weeklyData: List<Float>) {
-    val days = listOf("MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN")
+fun ActivityOverview(
+    isLoading: Boolean,
+    totalActions: Int,
+    weeklyData: List<Float>,
+    weeklyCounts: List<Int>
+) {
+    val days = listOf("Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun")
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
@@ -450,7 +536,7 @@ fun ActivityOverview(isLoading: Boolean, totalActions: Int, weeklyData: List<Flo
                 Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
                     Text("Activity Overview", fontSize = 16.sp,
                         fontWeight = FontWeight.Bold, color = TextPrimary)
-                    Text("Past 7 days performance", fontSize = 12.sp, color = TextMuted)
+                    Text("Scans & generations — past week", fontSize = 12.sp, color = TextMuted)
                 }
                 Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
                     Text(if (isLoading) "..." else "$totalActions",
@@ -459,33 +545,94 @@ fun ActivityOverview(isLoading: Boolean, totalActions: Int, weeklyData: List<Flo
                 }
             }
 
-            if (isLoading) {
-                SkeletonChart()
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(12.dp))
+                    .background(ChartTrackBg)
+                    .padding(horizontal = 8.dp, vertical = 12.dp)
+            ) {
+                if (isLoading) {
+                    SkeletonChart()
+                } else {
+                    WeeklyActivityBarChart(
+                        weeklyData = weeklyData,
+                        weeklyCounts = weeklyCounts,
+                        dayLabels = days
+                    )
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun WeeklyActivityBarChart(
+    weeklyData: List<Float>,
+    weeklyCounts: List<Int>,
+    dayLabels: List<String>
+) {
+    val maxBarArea = 104.dp
+    val labelHeight = 18.dp
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(maxBarArea + labelHeight + 18.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.Bottom
+    ) {
+        dayLabels.indices.forEach { i ->
+            val fraction = weeklyData.getOrElse(i) { 0f }.coerceIn(0f, 1f)
+            val count = weeklyCounts.getOrElse(i) { 0 }
+            val barBrush = if (count > 0) {
+                Brush.verticalGradient(listOf(ChartAccent, NavyDark))
             } else {
-                Row(
-                    modifier = Modifier.fillMaxWidth().height(100.dp),
-                    horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    verticalAlignment = Alignment.Bottom
+                Brush.verticalGradient(listOf(ChartBarIdle, Color(0xFFD1D5DB)))
+            }
+            val barH = maxOf(4.dp, maxBarArea * fraction)
+
+            Column(
+                modifier = Modifier.weight(1f),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Bottom
+            ) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(16.dp),
+                    contentAlignment = Alignment.Center
                 ) {
-                    days.forEachIndexed { i, day ->
-                        Column(
-                            modifier = Modifier.weight(1f),
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.Bottom
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .fillMaxWidth()
-                                    .height((80 * (weeklyData.getOrElse(i) { 0f })).coerceAtLeast(10f).dp)
-                                    .clip(RoundedCornerShape(4.dp))
-                                    .background(NavyDark)
-                            )
-                            Spacer(Modifier.height(6.dp))
-                            Text(day, fontSize = 9.sp, color = TextMuted,
-                                fontWeight = FontWeight.Medium)
-                        }
+                    if (count > 0) {
+                        Text(
+                            "$count",
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = NavyDark
+                        )
                     }
                 }
+                Box(
+                    modifier = Modifier
+                        .height(maxBarArea)
+                        .fillMaxWidth()
+                        .padding(horizontal = 2.dp),
+                    contentAlignment = Alignment.BottomCenter
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth(0.78f)
+                            .height(barH)
+                            .clip(RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp))
+                            .background(barBrush)
+                    )
+                }
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    dayLabels.getOrElse(i) { "" },
+                    fontSize = 10.sp,
+                    color = TextMuted,
+                    fontWeight = FontWeight.Medium
+                )
             }
         }
     }
@@ -498,23 +645,49 @@ fun SkeletonChart() {
         animationSpec = infiniteRepeatable(tween(800), RepeatMode.Reverse), label = "alpha"
     )
     Row(
-        modifier = Modifier.fillMaxWidth().height(100.dp),
-        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        modifier = Modifier
+            .fillMaxWidth()
+            .height(104.dp + 18.dp + 18.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
         verticalAlignment = Alignment.Bottom
     ) {
-        listOf(0.6f, 0.3f, 0.8f, 0.4f, 0.7f, 0.2f, 0.5f).forEach { h ->
-            Box(
-                modifier = Modifier.weight(1f).fillMaxHeight(h)
-                    .clip(RoundedCornerShape(4.dp))
-                    .background(Color.Gray.copy(shimmer))
-            )
+        repeat(7) {
+            Column(
+                modifier = Modifier.weight(1f),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Bottom
+            ) {
+                Box(Modifier.height(16.dp))
+                Box(
+                    Modifier
+                        .height(104.dp)
+                        .fillMaxWidth()
+                        .padding(horizontal = 2.dp),
+                    contentAlignment = Alignment.BottomCenter
+                ) {
+                    val h = listOf(0.6f, 0.3f, 0.8f, 0.4f, 0.7f, 0.2f, 0.5f)[it]
+                    Box(
+                        Modifier
+                            .fillMaxWidth(0.78f)
+                            .fillMaxHeight(h)
+                            .clip(RoundedCornerShape(topStart = 6.dp, topEnd = 6.dp))
+                            .background(Color.Gray.copy(shimmer))
+                    )
+                }
+                Spacer(Modifier.height(6.dp))
+                Box(Modifier.width(20.dp).height(8.dp).background(Color.Gray.copy(shimmer), RoundedCornerShape(2.dp)))
+            }
         }
     }
 }
 
 // ── Recent History ────────────────────────────────────────────────────────────
 @Composable
-fun RecentHistory(isLoading: Boolean, items: List<HistoryItem>) {
+fun RecentHistory(
+    isLoading: Boolean,
+    items: List<HistoryItem>,
+    onSeeAllClick: () -> Unit = {}
+) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(16.dp),
@@ -529,8 +702,13 @@ fun RecentHistory(isLoading: Boolean, items: List<HistoryItem>) {
             ) {
                 Text("Recent History", fontSize = 16.sp,
                     fontWeight = FontWeight.Bold, color = TextPrimary)
-                Text("See all", fontSize = 14.sp,
-                    fontWeight = FontWeight.SemiBold, color = NavyDark)
+                Text(
+                    "See all",
+                    fontSize = 14.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = NavyDark,
+                    modifier = Modifier.clickable { onSeeAllClick() }
+                )
             }
 
             HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
@@ -572,8 +750,17 @@ fun HistoryRow(item: HistoryItem) {
         }
 
         Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text(item.fileName, fontSize = 14.sp,
-                fontWeight = FontWeight.SemiBold, color = TextPrimary)
+            val openAsLink = item.fileName.trimStart().startsWith("http", ignoreCase = true)
+            Text(
+                item.fileName,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = if (openAsLink) Color(0xFF2563EB) else TextPrimary,
+                maxLines = 2,
+                modifier = Modifier.clickable(enabled = openAsLink) {
+                    openUrl(item.fileName.trim())
+                }
+            )
             Text("${item.action} • ${item.timeAgo}", fontSize = 12.sp, color = TextMuted)
         }
 
@@ -601,44 +788,70 @@ fun SkeletonHistoryRow() {
     }
 }
 
-// ── Upgrade Banner ────────────────────────────────────────────────────────────
-@Composable
-fun UpgradeBanner() {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .background(GreenBg, RoundedCornerShape(16.dp))
-            .border(1.dp, GreenBorder, RoundedCornerShape(16.dp))
-            .padding(14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(14.dp)
-    ) {
-        Box(
-            modifier = Modifier.size(48.dp).background(GreenIcon, CircleShape),
-            contentAlignment = Alignment.Center
-        ) {
-            Icon(Icons.Default.PersonAdd, contentDescription = null,
-                tint = GreenAccent, modifier = Modifier.size(22.dp))
-        }
-        Column(Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(3.dp)) {
-            Text("Upgrade to Pro", fontSize = 14.sp,
-                fontWeight = FontWeight.Bold, color = GreenAccent)
-            Text("Get unlimited generations and cloud sync.",
-                fontSize = 12.sp, color = TextSub)
-        }
-        Icon(Icons.Default.ChevronRight, contentDescription = null,
-            tint = GreenAccent, modifier = Modifier.size(16.dp))
+// ── Helpers ───────────────────────────────────────────────────────────────────
+fun formatTimeAgo(dateString: String): String {
+    val instant = parseAuditInstant(dateString) ?: return "recently"
+    val now = Clock.System.now()
+    val diffSeconds = (now - instant).inWholeSeconds
+
+    return when {
+        diffSeconds < 60 -> "just now"
+        diffSeconds < 3600 -> "${diffSeconds / 60} mins ago"
+        diffSeconds < 86400 -> "${diffSeconds / 3600} hrs ago"
+        diffSeconds < 604800 -> "${diffSeconds / 86400} days ago"
+        else -> "recently"
     }
 }
 
-// ── Helpers ───────────────────────────────────────────────────────────────────
-fun formatTimeAgo(dateString: String): String {
-    // Platform-specific date parsing — stub returns raw string
-    // On Android/iOS actual implementation via expect/actual
-    return "recently"
+fun getWeekday(dateString: String): Int {
+    val date = parseAuditInstant(dateString)
+        ?.toLocalDateTime(TimeZone.currentSystemDefault())
+        ?.date ?: return 0
+
+    return when (date.dayOfWeek) {
+        DayOfWeek.MONDAY -> 0
+        DayOfWeek.TUESDAY -> 1
+        DayOfWeek.WEDNESDAY -> 2
+        DayOfWeek.THURSDAY -> 3
+        DayOfWeek.FRIDAY -> 4
+        DayOfWeek.SATURDAY -> 5
+        DayOfWeek.SUNDAY -> 6
+    }
 }
 
-fun getWeekday(dateString: String): Int {
-    // Returns 1–7 (Sun–Sat), stub returns 1
-    return 1
+private fun weekActivityCounts(logs: List<JsonObject>): List<Int> {
+    val dayCounts = MutableList(7) { 0 }
+    logs.forEach { log ->
+        val dayIndex = getWeekday(log.optString("created_at", log.optString("event_time")))
+        if (dayIndex in 0..6) dayCounts[dayIndex]++
+    }
+    return dayCounts
 }
+
+private fun normalizedWeekBarsFromCounts(dayCounts: List<Int>): List<Float> {
+    val max = dayCounts.maxOrNull()?.takeIf { it > 0 } ?: 1
+    return dayCounts.map { it.toFloat() / max }
+}
+
+private fun parseAuditInstant(raw: String): Instant? {
+    if (raw.isBlank()) return null
+    val normalized = when {
+        raw.contains("T") && (raw.endsWith("Z") || raw.contains("+")) -> raw
+        raw.contains("T") -> "${raw}Z"
+        raw.contains(" ") -> raw.replace(" ", "T") + "Z"
+        else -> "${raw}T00:00:00Z"
+    }
+    return runCatching { Instant.parse(normalized) }.getOrNull()
+}
+
+private fun JsonObject.optObj(key: String): JsonObject =
+    this[key]?.jsonObject ?: JsonObject(emptyMap())
+
+private fun JsonObject.optArray(key: String): List<JsonObject> =
+    (this[key] as? JsonArray)?.mapNotNull { it as? JsonObject } ?: emptyList()
+
+private fun JsonObject.optInt(key: String): Int =
+    this[key]?.jsonPrimitive?.contentOrNull?.toIntOrNull() ?: 0
+
+private fun JsonObject.optString(key: String, fallback: String = ""): String =
+    this[key]?.jsonPrimitive?.contentOrNull ?: fallback

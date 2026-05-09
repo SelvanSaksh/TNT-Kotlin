@@ -31,9 +31,24 @@ expect fun ScannerView(
 fun Scans(
     onNavigate: (String) -> Unit
 ) {
+    var verifyAuthenticity by remember { mutableStateOf(true) }
+    var isMultiScan by remember { mutableStateOf(false) }
+    var showMoreSheet by remember { mutableStateOf(false) }
+
     var currentScanMode by remember { mutableStateOf("VERIFY") }
     var scannedResult by remember { mutableStateOf<String?>(null) }
     var showResult by remember { mutableStateOf(false) }
+
+    LaunchedEffect(verifyAuthenticity, isMultiScan) {
+        currentScanMode = when {
+            isMultiScan -> "MULTI"
+            verifyAuthenticity -> "VERIFY"
+            else -> "SINGLE"
+        }
+        showResult = false
+        scannedResult = null
+        println("SCANNERLOG: [Scans] mode resolved → $currentScanMode (verifyAuthenticity=$verifyAuthenticity, isMultiScan=$isMultiScan)")
+    }
     
     Box(modifier = Modifier.fillMaxSize()) {
         // Camera view
@@ -48,8 +63,12 @@ fun Scans(
                         scanMode = currentScanMode,
                         onScanResult = { result ->
                             scannedResult = result
-                            if (currentScanMode != "MULTI") {
+                            println("SCANNERLOG: [Scans] onScanResult mode=$currentScanMode resultLen=${result.length} preview='${result.take(120)}'")
+                            // When authenticity is enabled, Android scanner shows its own auth dialog/sheet.
+                            // Only show the raw popup when authenticity is disabled.
+                            if (!verifyAuthenticity && currentScanMode != "MULTI") {
                                 showResult = true
+                                println("SCANNERLOG: [Scans] showing raw result overlay (single scan, no auth)")
                             }
                         },
                         onNavigate = onNavigate
@@ -183,6 +202,21 @@ fun Scans(
             )
         }
 
+        // More options (like iOS bottom sheet)
+        IconButton(
+            onClick = { showMoreSheet = true },
+            modifier = Modifier
+                .align(Alignment.TopEnd)
+                .padding(16.dp)
+                .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
+        ) {
+            Icon(
+                imageVector = Icons.Default.MoreVert,
+                contentDescription = "More options",
+                tint = White
+            )
+        }
+
 /*        Box(
             modifier = Modifier
                 .padding(bottom = 12.dp)
@@ -196,6 +230,80 @@ fun Scans(
                 }
             )
         }*/
+    }
+
+    @OptIn(ExperimentalMaterial3Api::class)
+    if (showMoreSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showMoreSheet = false },
+            containerColor = Color.White
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                Text(
+                    "Scan Options",
+                    fontSize = 16.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color(0xFF111827)
+                )
+
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text(
+                        "SCAN MODE",
+                        fontSize = 11.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = Color(0xFF6B7280)
+                    )
+                    Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        FilterChip(
+                            selected = !isMultiScan,
+                            onClick = { isMultiScan = false },
+                            label = { Text("Single Scan") }
+                        )
+                        FilterChip(
+                            selected = isMultiScan,
+                            onClick = { isMultiScan = true },
+                            label = { Text("Multi Scan") }
+                        )
+                    }
+                }
+
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clip(RoundedCornerShape(14.dp))
+                        .background(Color(0xFFF3F4F6))
+                        .padding(horizontal = 14.dp, vertical = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.SpaceBetween
+                ) {
+                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text(
+                            "Verify Authenticity",
+                            fontSize = 14.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = Color(0xFF111827)
+                        )
+                        Text(
+                            if (verifyAuthenticity) "Enabled — barcodes will be authenticated"
+                            else "Disabled — raw barcode data only",
+                            fontSize = 12.sp,
+                            color = Color(0xFF6B7280)
+                        )
+                    }
+                    Switch(
+                        checked = verifyAuthenticity,
+                        onCheckedChange = { verifyAuthenticity = it }
+                    )
+                }
+
+                Spacer(Modifier.height(8.dp))
+            }
+        }
     }
 }
 

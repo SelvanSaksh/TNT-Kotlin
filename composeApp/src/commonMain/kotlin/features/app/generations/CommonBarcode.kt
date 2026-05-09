@@ -27,7 +27,7 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
-import core.network.models.AuditLogRequest
+import core.network.models.GenerationLogRequest
 import core.network.repository.AppRepository
 import io.ktor.client.*
 import io.ktor.client.call.*
@@ -37,10 +37,13 @@ import io.ktor.serialization.kotlinx.json.*
 import kotlinx.coroutines.launch
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import core.network.models.AuditDetails
-import core.network.models.LocationDetailsPayload
 import core.storage.SessionManager
 import core.storage.getLocalStorage
+import features.app.subscription.BillingRepository
+import features.app.subscription.GenerationLimitAlertDialog
+import features.app.subscription.SubscriptionFeatureKeys
+import features.app.subscription.SubscriptionLimitMessages
+import features.app.subscription.SubscriptionPlanLimits
 import utils.DeviceLocationProvider
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
@@ -73,12 +76,14 @@ fun CommonBarcodeScreen(
     onBack: () -> Unit,
     onShare: ((url: String) -> Unit)? = null,
     onSave:  ((url: String) -> Unit)? = null,
+    onNavigateToSubscription: () -> Unit = {},
 ) {
     var input            by remember { mutableStateOf("") }
     var selectedSize     by remember { mutableStateOf(sizeOptions[0]) }
     var isLoading        by remember { mutableStateOf(false) }
     var imageUrl         by remember { mutableStateOf<String?>(null) }
     var errorMsg         by remember { mutableStateOf<String?>(null) }
+    var showGenerationLimitDialog by remember { mutableStateOf(false) }
     val scope            = rememberCoroutineScope()
     val sessionManager = SessionManager(getLocalStorage())
     val locationProvider = remember { DeviceLocationProvider() }
@@ -95,6 +100,15 @@ fun CommonBarcodeScreen(
 
         if (!valid) {
             errorMsg = "Invalid input for ${barcodeType.displayName}"
+            return
+        }
+
+        if (SubscriptionPlanLimits.isMeteredFeatureExhausted(
+                sessionManager.getSubscriptionData(),
+                SubscriptionFeatureKeys.BARCODE_GENERATION
+            )
+        ) {
+            showGenerationLimitDialog = true
             return
         }
 
@@ -127,6 +141,9 @@ fun CommonBarcodeScreen(
                     "$DOWNLOAD_URL?folder_variable=TMP_IMAGE_FOLDER&filename=${res.filename}"
 
                 imageUrl = finalImageUrl
+
+                BillingRepository.incrementUsage(sessionManager, "barcode_generation", 1)
+                    .onFailure { println("⚠️ subscription usage: ${it.message}") }
 
                 // ✅ 2. Get Location
                 var lat = 0.0
@@ -169,33 +186,23 @@ fun CommonBarcodeScreen(
                     }
                 }
 
-                val companyId = sessionManager.getCompanyId()
-
-                if (companyId.isNullOrEmpty()) {
+                val companyId = sessionManager.getCompanyId()?.toIntOrNull()
+                if (companyId == null) {
                     println("❌ COMPANY ID MISSING")
                     return@launch
                 }
 
 
-                val auditRequest = AuditLogRequest(
-                    type = 1,
-                    company_id = sessionManager.getCompanyId() ?: "",
-                    user_id = sessionManager.getUserId()?.toString() ?: "",
-
-                    location_details = LocationDetailsPayload(
-                        lat = lat,
-                        long = lon,
-                        currentCity = city ?: "Unknown",
-                        state = state ?: "Unknown"
-                    ),
-
-                    details = AuditDetails(
-                        barcode = input,
-                        status = "generated",
-                        barcodeType = barcodeType.displayName,
-                        device = "Android",
-                        timestamp = Clock.System.now().toString()
-                    )
+                val generationRequest = GenerationLogRequest(
+                    barcode_type = barcodeType.displayName,
+                    barcode_data = input,
+                    company_id = companyId,
+                    lat = lat,
+                    long = lon,
+                    event_id = core.util.newGenerationEventId(),
+                    serial = core.util.extractGs1Serial(input),
+                    batch = core.util.extractGs1Batch(input),
+                    device_type = "android"
                 )
 
                 println("🚀 AUDIT REQUEST:")
@@ -204,7 +211,7 @@ fun CommonBarcodeScreen(
                 println("lat: $lat, lon: $lon")
 
                 // ✅ 4. Send Audit Log
-                val result = AppRepository.sendAuditLog(auditRequest)
+                val result = AppRepository.sendGenerationLog(generationRequest)
 
                 if (result.isSuccess) {
                     println("✅ AUDIT SUCCESS")
@@ -237,10 +244,7 @@ fun CommonBarcodeScreen(
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = Brand)
             }
             Spacer(Modifier.width(16.dp))
-            Column {
-                Text(barcodeType.displayName, fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Brand)
-                Text(barcodeType.description, fontSize = 12.sp, color = Brand.copy(alpha = 0.5f))
-            }
+            Text(barcodeType.displayName, fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Brand)
         }
 
         Column(
@@ -477,6 +481,13 @@ fun CommonBarcodeScreen(
 
             Spacer(Modifier.height(32.dp))
         }
+
+        GenerationLimitAlertDialog(
+            visible = showGenerationLimitDialog,
+            message = SubscriptionLimitMessages.BARCODE_GENERATION,
+            onDismiss = { showGenerationLimitDialog = false },
+            onUpgrade = onNavigateToSubscription,
+        )
     }
 }
 

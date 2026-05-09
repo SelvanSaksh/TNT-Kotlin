@@ -25,9 +25,7 @@ import com.example.scanner_sdk.customview.authandsingle.VerificationScannerView
 import com.example.scanner_sdk.customview.multi.view.MultiScannerView
 import com.example.scanner_sdk.customview.single.ScannerController
 import com.example.scanner_sdk.customview.single.view.SingleScannerView
-import core.network.models.AuditDetails
-import core.network.models.AuditLogRequest
-import core.network.models.LocationDetailsPayload
+import core.network.models.ScanLogCreateRequest
 import core.network.repository.AppRepository
 import core.storage.SessionManager
 import core.storage.getLocalStorage
@@ -35,6 +33,7 @@ import dialog.AuthenticProductDialog
 import dialog.parseScanResponse
 import kotlinx.coroutines.launch
 import org.json.JSONArray
+import org.json.JSONObject
 import utils.DeviceLocationProvider
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
@@ -63,6 +62,200 @@ actual fun ScannerView(
     val jsonResponse = remember { mutableStateOf<String?>(null) }
     var dialogTrigger by remember { mutableStateOf(0) }
     var rawData by remember { mutableStateOf("") }
+
+    fun normalizeBarcodeType(rawType: String): String {
+        val t = rawType.trim().uppercase()
+        return when {
+            "128" in t || "CODE128" in t -> "CODE128"
+            "EAN13" in t || "EAN-13" in t -> "EAN13"
+            "EAN8" in t || "EAN-8" in t -> "EAN8"
+            "DATAMATRIX" in t || "DATA_MATRIX" in t -> "DATAMATRIX"
+            "QR" in t -> "QR"
+            else -> "QR"
+        }
+    }
+
+    fun extractScanPayload(scannedValue: String): Pair<String, String> {
+        val trimmed = scannedValue.trim()
+        return try {
+            when {
+                trimmed.startsWith("[") -> {
+                    val arr = JSONArray(trimmed)
+                    if (arr.length() == 0) {
+                        "QR" to trimmed
+                    } else {
+                        val obj = arr.getJSONObject(0)
+                        val data = obj.optString("barcode_data")
+                            .ifBlank { obj.optString("data") }
+                            .ifBlank { obj.optString("raw") }
+                            .ifBlank { trimmed }
+                        val rawType = obj.optString("barcode_type")
+                            .ifBlank { obj.optString("format") }
+                            .ifBlank { obj.optString("symbology") }
+                            .ifBlank {
+                                if (data.startsWith("http", ignoreCase = true)) "QR" else "CODE128"
+                            }
+                        normalizeBarcodeType(rawType) to data
+                    }
+                }
+                trimmed.startsWith("{") -> {
+                    val obj = JSONObject(trimmed)
+                    val data = obj.optString("barcode_data")
+                        .ifBlank { obj.optString("data") }
+                        .ifBlank { obj.optString("raw") }
+                        .ifBlank { trimmed }
+                    val rawType = obj.optString("barcode_type")
+                        .ifBlank { obj.optString("format") }
+                        .ifBlank { obj.optString("symbology") }
+                        .ifBlank {
+                            if (data.startsWith("http", ignoreCase = true)) "QR" else "CODE128"
+                        }
+                    normalizeBarcodeType(rawType) to data
+                }
+                else -> {
+                    val inferredType = if (trimmed.startsWith("http", ignoreCase = true)) "QR" else "CODE128"
+                    inferredType to trimmed
+                }
+            }
+        } catch (_: Exception) {
+            val inferredType = if (trimmed.startsWith("http", ignoreCase = true)) "QR" else "CODE128"
+            inferredType to trimmed
+        }
+    }
+
+    /**
+     * Extracts the GS1 identifiers (GTIN / serial / batch) from a SDK scan response.
+     *
+     * Response shape (per [parseScanResponse]):
+     *   [{ "gs1_data": { "01": {"name":"GTIN","value":"..."},
+     *                    "21": {"name":"Serial","value":"..."},
+     *                    "10": {"name":"Batch/Lot","value":"..."} }, ... }]
+     */
+    fun extractGs1Identifiers(scannedValue: String): Triple<String, String, String> {
+        val trimmed = scannedValue.trim()
+        return try {
+            val obj: JSONObject? = when {
+                trimmed.startsWith("[") -> {
+                    val arr = JSONArray(trimmed)
+                    if (arr.length() == 0) null else arr.optJSONObject(0)
+                }
+                trimmed.startsWith("{") -> JSONObject(trimmed)
+                else -> null
+            }
+            val gs1 = obj?.optJSONObject("gs1_data") ?: return Triple("", "", "")
+
+            val gtin = gs1.optJSONObject("01")?.optString("value").orEmpty()
+            val serial = gs1.optJSONObject("21")?.optString("value").orEmpty()
+            val batch = gs1.optJSONObject("10")?.optString("value").orEmpty()
+            Triple(gtin, serial, batch)
+        } catch (_: Exception) {
+            Triple("", "", "")
+        }
+    }
+
+    fun sendScanLog(scannedValue: String, epcCandidate: String, scanMode: String) {
+        scope.launch {
+            val tag = "SCANNERLOG"
+            Log.d(
+                tag,
+                "[$scanMode] sendScanLog() ▶ START epcCandidate='${epcCandidate.take(60)}' scannedValueLen=${scannedValue.length} scannedValuePreview='${scannedValue.take(120)}'"
+            )
+
+            var lat = 0.0
+            var lon = 0.0
+
+            Log.d(tag, "[$scanMode] sendScanLog() ▶ requesting current location…")
+            val locationPair = locationProvider.getCurrentLocation()
+            if (locationPair != null) {
+                lat = locationPair.first
+                lon = locationPair.second
+                Log.d(tag, "[$scanMode] sendScanLog() ✓ location lat=$lat lon=$lon")
+
+                val locationResult = AppRepository.getLocationDetails(lat, lon)
+                locationResult
+                    .onSuccess { loc ->
+                        Log.d(
+                            tag,
+                            "[$scanMode] sendScanLog() ✓ reverse-geocoded city=${loc.city} state=${loc.state} country=${loc.country}"
+                        )
+                    }
+                    .onFailure { err ->
+                        Log.w(tag, "[$scanMode] sendScanLog() ⚠ reverse-geocode failed: ${err.message}")
+                    }
+            } else {
+                Log.w(tag, "[$scanMode] sendScanLog() ⚠ location unavailable, defaulting lat=0 lon=0")
+            }
+
+            val companyId = sessionManager.getCompanyId()?.toIntOrNull()
+                ?: run {
+                    // Fallback: company id is also inside stored user_detail JSON as "companyid"
+                    val ud = sessionManager.getUserDetail().orEmpty()
+                    Log.d(
+                        tag,
+                        "[$scanMode] sendScanLog() ▶ companyId missing in session, falling back to user_detail JSON (len=${ud.length})"
+                    )
+                    runCatching {
+                        JSONObject(ud).optInt("companyid", 0)
+                    }.getOrNull()?.takeIf { it > 0 }
+                }
+                ?: run {
+                    Log.e("ScanLog", "[$scanMode] ❌ Log skipped: companyId missing")
+                    return@launch
+                }
+            Log.d(tag, "[$scanMode] sendScanLog() ✓ companyId=$companyId")
+
+            val (gtin, serial, batch) = extractGs1Identifiers(scannedValue)
+            // Fall back to the raw scanned value when GS1 parsing yields no GTIN
+            // (e.g. plain SINGLE-mode barcodes like "ABC-1234" without gs1_data).
+            val epcId = gtin.ifBlank { epcCandidate.ifBlank { scannedValue.trim() } }
+            val geoLocation = "$lat,$lon"
+            Log.d(
+                tag,
+                "[$scanMode] sendScanLog() ✓ parsed gs1 gtin='$gtin' serial='$serial' batch='$batch' → epc_id='$epcId'"
+            )
+
+            val isAuthFlow = scanMode.equals("VERIFY", ignoreCase = true) ||
+                    scanMode.equals("AUTH", ignoreCase = true)
+
+            val scanRequest = ScanLogCreateRequest(
+                event_type = if (isAuthFlow) "AUTHENTICATE" else "SCAN",
+                epc_id = epcId,
+                event_time = Clock.System.now().toString(),
+                biz_step = "urn:epcglobal:cbv:bizstep:receiving",
+                biz_location = "urn:epc:id:sgln:0000123.00000.0",
+                geo_location = geoLocation,
+                auth_result = if (isAuthFlow) "AUTHENTIC" else "UNKNOWN",
+                scanner_id = "android_${scanMode.lowercase()}",
+                signature = "0xandroid",
+                company_id = companyId,
+                serial = serial,
+                batch = batch,
+                device_type = "android"
+            )
+
+            Log.d(
+                tag,
+                "[$scanMode] sendScanLog() ▶ POSTing /companies/barcode/create event_type=${scanRequest.event_type} auth_result=${scanRequest.auth_result} scanner_id=${scanRequest.scanner_id} epc_id=${scanRequest.epc_id} serial=${scanRequest.serial} batch=${scanRequest.batch} geo_location=${scanRequest.geo_location} companyId=${scanRequest.company_id}"
+            )
+
+            val result = AppRepository.sendScanCreateLog(scanRequest)
+            if (result.isSuccess) {
+                Log.d(
+                    "ScanLog",
+                    "[$scanMode] ✅ Logged scan epc_id=$epcId serial=$serial batch=$batch"
+                )
+                Log.d(tag, "[$scanMode] sendScanLog() ◀ DONE success")
+            } else {
+                val err = result.exceptionOrNull()
+                Log.e(
+                    "ScanLog",
+                    "[$scanMode] ❌ Log failed: ${err?.message}",
+                    err
+                )
+                Log.d(tag, "[$scanMode] sendScanLog() ◀ DONE failure")
+            }
+        }
+    }
     // ✅ Step 1 — Declare the launcher
     val galleryLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
@@ -83,7 +276,12 @@ actual fun ScannerView(
             when (scanMode) {
 
                 "VERIFY" -> {
+                    Log.d(
+                        "SCANNERLOG",
+                        "[VERIFY] ▶ ScannerView factory CALLED — building CommonScannerView (authentication flow)"
+                    )
                     val view = CommonScannerView(ctx)
+                    Log.d("SCANNERLOG", "[VERIFY] ✓ CommonScannerView instantiated, wiring ScannerController…")
                     controller = ScannerController(
                         singleScannerView = null,
                         verificationScanner = null,
@@ -92,119 +290,144 @@ actual fun ScannerView(
                         authScannerView = null,
                         lifecycleOwner = lifecycleOwner,
                         fragmentManager = fragmentManager,
-                        openGallery = { galleryLauncher.launch("image/*") },
+                        openGallery = {
+                            Log.d("SCANNERLOG", "[VERIFY] ▶ openGallery requested by SDK")
+                            galleryLauncher.launch("image/*")
+                        },
                         result = { scanResult ->
 
                             rawData = scanResult.first
                             val scannedValue = scanResult.second.toString()
+                            Log.d(
+                                "SCANNERLOG",
+                                "[VERIFY] ✓ SDK result callback fired rawDataLen=${rawData.length} rawData='${rawData.take(80)}' scannedValueLen=${scannedValue.length} scannedValuePreview='${scannedValue.take(120)}'"
+                            )
                             println("📦 SCANNED VALUE: $scannedValue")
 
-                            // Parse JSON
-                            val jsonArray = JSONArray(scannedValue)
-                            val barcodeData = jsonArray.getJSONObject(0).getString("barcode_data")
-
-                            println("📦 barcodeData VALUE: $barcodeData")
+                            onScanResult(scannedValue)
+                            Log.d("SCANNERLOG", "[VERIFY] ▶ forwarding to sendScanLog()")
+                            sendScanLog(
+                                scannedValue = scannedValue,
+                                epcCandidate = rawData,
+                                scanMode = scanMode
+                            )
 
                             jsonResponse.value = scannedValue
                             dialogTrigger++
-
-                            scope.launch {
-
-                                var lat = 0.0
-                                var lon = 0.0
-                                var city: String? = null
-                                var state: String? = null
-
-                                val locationPair = locationProvider.getCurrentLocation()
-
-                                if (locationPair != null) {
-                                    lat = locationPair.first
-                                    lon = locationPair.second
-
-                                    val locationResult = AppRepository.getLocationDetails(lat, lon)
-
-                                    locationResult.onSuccess {
-                                        city = it.city ?: "Unknown"
-                                        state = it.state ?: "Unknown"
-                                    }.onFailure {
-                                        city = "Unknown"
-                                        state = "Unknown"
-                                    }
-                                }
-
-                                val companyId = sessionManager.getCompanyId()
-                                if (companyId.isNullOrEmpty()) return@launch
-
-                                val auditRequest = AuditLogRequest(
-                                    type = 0,
-                                    company_id = companyId,
-                                    user_id = sessionManager.getUserId()?.toString() ?: "",
-                                    location_details = LocationDetailsPayload(
-                                        lat = lat,
-                                        long = lon,
-                                        currentCity = city,
-                                        state = state
-                                    ),
-                                    details = AuditDetails(
-                                        barcode = scannedValue,
-                                        status = "scanned",
-                                        barcodeType = "Scan",
-                                        device = "Android",
-                                        timestamp = Clock.System.now().toString()
-                                    )
-                                )
-
-                                AppRepository.sendAuditLog(auditRequest)
-                            }
+                            Log.d(
+                                "SCANNERLOG",
+                                "[VERIFY] ✓ AuthenticProductDialog trigger incremented (dialogTrigger=$dialogTrigger)"
+                            )
                         },
 
 //                        result = {
 //                            jsonResponse.value = it.toString()
 //                            showAuthDialog.value = true
 //                        },
-                        error = {
-                            Toast.makeText(context, "Error data received : ${it.second}", Toast.LENGTH_SHORT).show()
+                        error = { err ->
+                            Log.e(
+                                "SCANNERLOG",
+                                "[VERIFY] ❌ SDK error callback code=${err.first} message=${err.second}"
+                            )
+                            Toast.makeText(context, "Error data received : ${err.second}", Toast.LENGTH_SHORT).show()
                         }
                     )
 
+                    Log.d("SCANNERLOG", "[VERIFY] ▶ controller.startCommonScanner(userId=1, companyId=48)")
                     controller?.startCommonScanner(ctx, "1", "48")
+                    Log.d("SCANNERLOG", "[VERIFY] ✓ startCommonScanner() returned, view ready")
                     view
                 }
 
                 "SINGLE" -> {
+                    Log.d(
+                        "SCANNERLOG",
+                        "[SINGLE] ▶ ScannerView factory CALLED — building SingleScannerView"
+                    )
                     val view = SingleScannerView(ctx)
-                    Log.d("SCANNERLOG", "ScannerView: Single CALLED//////////////")
+                    Log.d("SCANNERLOG", "[SINGLE] ✓ SingleScannerView instantiated, wiring ScannerController…")
                     controller = ScannerController(
                         singleScannerView = view,
                         multiScanner = null,
                         authScannerView = null,
                         lifecycleOwner = lifecycleOwner,
                         fragmentManager = fragmentManager,
-                        openGallery = { galleryLauncher.launch("image/*") },
-                        result = {},
-                        error = {}
+                        openGallery = {
+                            Log.d("SCANNERLOG", "[SINGLE] ▶ openGallery requested by SDK")
+                            galleryLauncher.launch("image/*")
+                        },
+                        result = { scanResult ->
+                            rawData = scanResult.first
+                            val scannedValue = scanResult.second.toString()
+                            Log.d(
+                                "SCANNERLOG",
+                                "[SINGLE] ✓ SDK result callback fired rawDataLen=${rawData.length} rawData='${rawData.take(80)}' scannedValueLen=${scannedValue.length} scannedValuePreview='${scannedValue.take(120)}'"
+                            )
+                            onScanResult(scannedValue)
+                            Log.d("SCANNERLOG", "[SINGLE] ▶ forwarding to sendScanLog()")
+                            sendScanLog(
+                                scannedValue = scannedValue,
+                                epcCandidate = rawData,
+                                scanMode = scanMode
+                            )
+                        },
+                        error = { err ->
+                            Log.e(
+                                "SCANNERLOG",
+                                "[SINGLE] ❌ SDK error callback code=${err.first} message=${err.second}"
+                            )
+                        }
                     )
 
+                    Log.d("SCANNERLOG", "[SINGLE] ▶ controller.startSingleScanner()")
                     controller?.startSingleScanner(ctx)
+                    Log.d("SCANNERLOG", "[SINGLE] ✓ startSingleScanner() returned, view ready")
                     view
                 }
 
                 "AUTH" -> {
+                    Log.d(
+                        "SCANNERLOG",
+                        "[AUTH] ▶ ScannerView factory CALLED — building AuthScannerView (authentication flow)"
+                    )
                     val view = AuthScannerView(ctx)
-
-                    Log.d("SCANNERLOG", "ScannerView: AUTHCALLED//////////////")
+                    Log.d("SCANNERLOG", "[AUTH] ✓ AuthScannerView instantiated, wiring ScannerController…")
                     controller = ScannerController(
                         singleScannerView = null,
                         multiScanner = null,
                         authScannerView = view,
                         lifecycleOwner = lifecycleOwner,
                         fragmentManager = fragmentManager,
-                        openGallery = { galleryLauncher.launch("image/*") },
-                        result = {},
-                        error = {}
+                        openGallery = {
+                            Log.d("SCANNERLOG", "[AUTH] ▶ openGallery requested by SDK")
+                            galleryLauncher.launch("image/*")
+                        },
+                        result = { scanResult ->
+                            rawData = scanResult.first
+                            val scannedValue = scanResult.second.toString()
+                            Log.d(
+                                "SCANNERLOG",
+                                "[AUTH] ✓ SDK result callback fired rawDataLen=${rawData.length} rawData='${rawData.take(80)}' scannedValueLen=${scannedValue.length} scannedValuePreview='${scannedValue.take(120)}'"
+                            )
+                            onScanResult(scannedValue)
+                            Log.d("SCANNERLOG", "[AUTH] ▶ forwarding to sendScanLog()")
+                            sendScanLog(
+                                scannedValue = scannedValue,
+                                epcCandidate = rawData,
+                                scanMode = scanMode
+                            )
+                        },
+                        error = { err ->
+                            Log.e(
+                                "SCANNERLOG",
+                                "[AUTH] ❌ SDK error callback code=${err.first} message=${err.second}"
+                            )
+                        }
                     )
 
+                    Log.d("SCANNERLOG", "[AUTH] ▶ controller.startAuthScanner(userId='', companyId='')")
                     controller?.startAuthScanner(ctx, "", "")
+                    Log.d("SCANNERLOG", "[AUTH] ✓ startAuthScanner() returned, view ready")
                     view
                 }
 
@@ -218,7 +441,20 @@ actual fun ScannerView(
                         lifecycleOwner = lifecycleOwner,
                         fragmentManager = fragmentManager,
                         openGallery = { galleryLauncher.launch("image/*") },
-                        result = {},
+                        result = { scanResult ->
+                            rawData = scanResult.first
+                            val scannedValue = scanResult.second.toString()
+                            Log.d(
+                                "SCANNERLOG",
+                                "SDK result callback MULTI fired rawData=${rawData.take(60)} scannedValue=${scannedValue.take(80)}"
+                            )
+                            onScanResult(scannedValue)
+                            sendScanLog(
+                                scannedValue = scannedValue,
+                                epcCandidate = rawData,
+                                scanMode = scanMode
+                            )
+                        },
                         error = {}
                     )
 

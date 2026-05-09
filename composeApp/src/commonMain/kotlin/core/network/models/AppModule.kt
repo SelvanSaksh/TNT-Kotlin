@@ -90,3 +90,33 @@ data class AuditDetails @OptIn(ExperimentalTime::class) constructor(
     val device: String,
     val timestamp: String
 )
+
+@Serializable
+data class ScanLogCreateRequest(
+    val event_type: String,
+    val epc_id: String,
+    val event_time: String,
+    val biz_step: String,
+    val biz_location: String,
+    val geo_location: String,
+    val auth_result: String,
+    val scanner_id: String,
+    val signature: String,
+    val company_id: Int,
+    val serial: String,
+    val batch: String,
+    val device_type: String
+)
+
+@Serializable
+data class GenerationLogRequest(
+    val barcode_type: String,
+    val barcode_data: String,
+    val company_id: Int,
+    val lat: Double,
+    val long: Double,
+    val event_id: String,
+    val serial: String,
+    val batch: String,
+    val device_type: String
+)

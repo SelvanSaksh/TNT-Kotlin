@@ -41,12 +41,15 @@ import kotlinx.coroutines.launch
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import core.network.models.AuditLogRequest
-import core.network.models.AuditDetails
-import core.network.models.LocationDetailsPayload
+import core.network.models.GenerationLogRequest
 import core.network.repository.AppRepository
 import core.storage.SessionManager
 import core.storage.getLocalStorage
+import features.app.subscription.BillingRepository
+import features.app.subscription.GenerationLimitAlertDialog
+import features.app.subscription.SubscriptionFeatureKeys
+import features.app.subscription.SubscriptionLimitMessages
+import features.app.subscription.SubscriptionPlanLimits
 import utils.DeviceLocationProvider
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
@@ -181,7 +184,8 @@ private fun buildDownloadUrl(filename: String) =
 @OptIn(ExperimentalTime::class)
 @Composable
 fun GS12DBarcode(
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onNavigateToSubscription: () -> Unit = {},
 ) {
     // ── State ──────────────────────────────────
     var selectedType by remember { mutableStateOf("QR Code") }
@@ -204,6 +208,7 @@ fun GS12DBarcode(
 
     var isLoading by remember { mutableStateOf(false) }
     var alertMessage by remember { mutableStateOf<String?>(null) }
+    var showGenerationLimitDialog by remember { mutableStateOf(false) }
 
     // Barcode result image URLs
     var barcodeImageUrls by remember { mutableStateOf<List<String>>(emptyList()) }
@@ -233,23 +238,26 @@ fun GS12DBarcode(
                 .fillMaxSize()
                 .background(Color.White)
         ) {
-            Spacer(modifier = Modifier.height(16.dp))
+            Spacer(modifier = Modifier.height(25.dp))
 
             // Header
             Row(
                 modifier = Modifier
                     .fillMaxWidth()
-                    .padding(horizontal = 16.dp),
+                    .padding(horizontal = 16.dp, vertical = 12.dp),
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                IconButton(onClick = onBack) {
+                IconButton(
+                    onClick = onBack,
+                    modifier = Modifier.size(24.dp)
+                ) {
                     Icon(
                         imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                         contentDescription = "Back",
                         tint = Color(0xFF133D63)
                     )
                 }
-                Spacer(modifier = Modifier.width(12.dp))
+                Spacer(modifier = Modifier.width(16.dp))
                 Text(
                     text = "GS1 2D Barcode",
                     fontSize = 22.sp,
@@ -461,6 +469,15 @@ fun GS12DBarcode(
                             return@PrimaryButton
                         }
 
+                        if (SubscriptionPlanLimits.isMeteredFeatureExhausted(
+                                sessionManager.getSubscriptionData(),
+                                SubscriptionFeatureKeys.BARCODE_GENERATION
+                            )
+                        ) {
+                            showGenerationLimitDialog = true
+                            return@PrimaryButton
+                        }
+
                         // ── Build GS1 string ──
                         val gs1Data = buildGS1String(gtin, selectedFields, fieldValues)
 
@@ -498,6 +515,9 @@ fun GS12DBarcode(
                                     // 🔥 AUDIT LOG START
                                     coroutineScope.launch {
 
+                                        BillingRepository.incrementUsage(sessionManager, "barcode_generation", 1)
+                                            .onFailure { println("⚠️ subscription usage: ${it.message}") }
+
                                         var lat = 0.0
                                         var lon = 0.0
                                         var city: String? = null
@@ -526,32 +546,29 @@ fun GS12DBarcode(
                                             }
                                         }
 
-                                        val companyId = sessionManager.getCompanyId()
-                                        if (companyId.isNullOrEmpty()) {
+                                        val companyId = sessionManager.getCompanyId()?.toIntOrNull()
+                                        if (companyId == null) {
                                             println("❌ COMPANY ID MISSING")
                                             return@launch
                                         }
 
-                                        val auditRequest = AuditLogRequest(
-                                            type = 1,
+                                        val generationRequest = GenerationLogRequest(
+                                            barcode_type = selectedType,
+                                            barcode_data = gs1Data,
                                             company_id = companyId,
-                                            user_id = sessionManager.getUserId()?.toString() ?: "",
-                                            location_details = LocationDetailsPayload(
-                                                lat = lat,
-                                                long = lon,
-                                                currentCity = city,
-                                                state = state
-                                            ),
-                                            details = AuditDetails(
-                                                barcode = gs1Data, // 🔥 IMPORTANT
-                                                status = "generated",
-                                                barcodeType = selectedType,
-                                                device = "Android",
-                                                timestamp = Clock.System.now().toString()
-                                            )
+                                            lat = lat,
+                                            long = lon,
+                                            event_id = core.util.newGenerationEventId(),
+                                            serial = fieldValues["Serial No"]
+                                                ?.takeIf { it.isNotBlank() }
+                                                ?: core.util.extractGs1Serial(gs1Data),
+                                            batch = fieldValues["Batch Number"]
+                                                ?.takeIf { it.isNotBlank() }
+                                                ?: core.util.extractGs1Batch(gs1Data),
+                                            device_type = "android"
                                         )
 
-                                        val auditResult = AppRepository.sendAuditLog(auditRequest)
+                                        val auditResult = AppRepository.sendGenerationLog(generationRequest)
 
                                         if (auditResult.isSuccess) {
                                             println("✅ GS1 AUDIT SUCCESS")
@@ -567,6 +584,12 @@ fun GS12DBarcode(
 
                                     // 🔥 AUDIT LOG START
                                     coroutineScope.launch {
+
+                                        BillingRepository.incrementUsage(
+                                            sessionManager,
+                                            "barcode_generation",
+                                            result.urls.size
+                                        ).onFailure { println("⚠️ subscription usage: ${it.message}") }
 
                                         var lat = 0.0
                                         var lon = 0.0
@@ -602,36 +625,33 @@ fun GS12DBarcode(
                                             }
                                         }
 
-                                        val companyId = sessionManager.getCompanyId()
-                                        if (companyId.isNullOrEmpty()) {
+                                        val companyId = sessionManager.getCompanyId()?.toIntOrNull()
+                                        if (companyId == null) {
                                             println("❌ COMPANY ID MISSING")
                                             return@launch
                                         }
 
-                                        val auditRequest = AuditLogRequest(
-                                            type = 1,
+                                        val generationRequest = GenerationLogRequest(
+                                            barcode_type = selectedType,
+                                            barcode_data = gs1Data,
                                             company_id = companyId,
-                                            user_id = sessionManager.getUserId()?.toString() ?: "",
-                                            location_details = LocationDetailsPayload(
-                                                lat = lat,
-                                                long = lon,
-                                                currentCity = city,
-                                                state = state
-                                            ),
-                                            details = AuditDetails(
-                                                barcode = gs1Data,
-                                                status = "generated",
-                                                barcodeType = selectedType,
-                                                device = "Android",
-                                                timestamp = Clock.System.now().toString()
-                                            )
+                                            lat = lat,
+                                            long = lon,
+                                            event_id = core.util.newGenerationEventId(),
+                                            serial = fieldValues["Serial No"]
+                                                ?.takeIf { it.isNotBlank() }
+                                                ?: core.util.extractGs1Serial(gs1Data),
+                                            batch = fieldValues["Batch Number"]
+                                                ?.takeIf { it.isNotBlank() }
+                                                ?: core.util.extractGs1Batch(gs1Data),
+                                            device_type = "android"
                                         )
 
                                         println("🚀 MULTIPLE AUDIT REQUEST:")
                                         println("📦 barcode: $gs1Data")
                                         println("📍 lat: $lat, lon: $lon")
 
-                                        val auditResult = AppRepository.sendAuditLog(auditRequest)
+                                        val auditResult = AppRepository.sendGenerationLog(generationRequest)
 
                                         if (auditResult.isSuccess) {
                                             println("✅ MULTIPLE AUDIT SUCCESS")
@@ -690,6 +710,13 @@ fun GS12DBarcode(
             }
         )
     }
+
+    GenerationLimitAlertDialog(
+        visible = showGenerationLimitDialog,
+        message = SubscriptionLimitMessages.BARCODE_GENERATION,
+        onDismiss = { showGenerationLimitDialog = false },
+        onUpgrade = onNavigateToSubscription,
+    )
 
     if (showIndicatorSheet) {
         IndicatorSelectionSheet(

@@ -17,6 +17,10 @@ object StorageKeys {
     const val USER_EMAIL = "user_email"
     const val USER_DETAIL = "user_detail"
     const val COMPANY_ID = "company_id"
+    const val SUBSCRIPTION_DATA = "subscription_data"
+    const val SUBSCRIPTION_STATUS = "subscription_status"
+    const val SUBSCRIPTION_PLAN_ID = "subscription_plan_id"
+    const val LOCATION_DETAILS = "location_details"
 }
 
 class SessionManager(private val storage: LocalStorage) {
@@ -64,14 +68,34 @@ class SessionManager(private val storage: LocalStorage) {
         storage.saveString(StorageKeys.COMPANY_ID, companyId)
     }
 
+    fun saveSubscription(
+        rawJson: String,
+        status: String,
+        planId: String
+    ) {
+        storage.saveString(StorageKeys.SUBSCRIPTION_DATA, rawJson)
+        storage.saveString(StorageKeys.SUBSCRIPTION_STATUS, status)
+        storage.saveString(StorageKeys.SUBSCRIPTION_PLAN_ID, planId)
+    }
+
+    fun getSubscriptionData(): String? = storage.getString(StorageKeys.SUBSCRIPTION_DATA)
+
+    fun getSubscriptionStatus(): String? = storage.getString(StorageKeys.SUBSCRIPTION_STATUS)
+
+    fun getSubscriptionPlanId(): String? = storage.getString(StorageKeys.SUBSCRIPTION_PLAN_ID)
+
+    fun saveLocationDetails(rawJson: String) {
+        storage.saveString(StorageKeys.LOCATION_DETAILS, rawJson)
+    }
+
+    fun getLocationDetails(): String? = storage.getString(StorageKeys.LOCATION_DETAILS)
+
     fun isLoggedIn(): Boolean {
         return getAccessToken() != null
     }
 
     fun clearSession() {
-        storage.remove(StorageKeys.ACCESS_TOKEN)
-        storage.remove(StorageKeys.USER_ID)
-        storage.remove(StorageKeys.USER_EMAIL)
-        storage.remove(StorageKeys.USER_DETAIL)
+        // User requested local storage to be cleared on logout.
+        storage.clear()
     }
 }

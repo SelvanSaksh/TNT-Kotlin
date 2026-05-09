@@ -29,6 +29,11 @@ import components.InputField
 import components.PrimaryButton
 import core.storage.SessionManager
 import core.storage.getLocalStorage
+import features.app.subscription.BillingRepository
+import features.app.subscription.GenerationLimitAlertDialog
+import features.app.subscription.SubscriptionFeatureKeys
+import features.app.subscription.SubscriptionLimitMessages
+import features.app.subscription.SubscriptionPlanLimits
 import utils.DeviceLocationProvider
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
@@ -135,6 +140,7 @@ fun MultiLinkBarcodeScreen(
     onDownload: (url: String, name: String) -> Unit = { _, _ -> },
     onCopyUrl: (url: String) -> Unit = {},
     onBack: () -> Unit = {},
+    onNavigateToSubscription: () -> Unit = {},
 ) {
     val sessionManager = SessionManager(getLocalStorage())
     val locationProvider = remember { DeviceLocationProvider() }
@@ -142,23 +148,44 @@ fun MultiLinkBarcodeScreen(
 
     var form by remember { mutableStateOf(MultiLinkFormState()) }
     val disabled = remember(form) { isFormDisabled(form) }
+    var showMultiLinkLimitDialog by remember { mutableStateOf(false) }
+
+    /** Increment multi_url usage when host passes a generated image URL (successful backend generation). */
+    var lastReportedGenerationUrl by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(generatedBarcodeImageUrl) {
+        val url = generatedBarcodeImageUrl
+        if (url.isNullOrBlank()) {
+            lastReportedGenerationUrl = null
+            return@LaunchedEffect
+        }
+        if (url == lastReportedGenerationUrl) return@LaunchedEffect
+        lastReportedGenerationUrl = url
+        BillingRepository.incrementUsage(sessionManager, "multi_url", 1)
+            .onFailure { println("⚠️ subscription usage: ${it.message}") }
+    }
 
     Column(
         modifier = Modifier
             .fillMaxSize()
             .background(Background)
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp, vertical = 24.dp),
+            .padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
+        Spacer(modifier = Modifier.height(25.dp))
 
         // ── Page title ─────────────────────────────────────────────────────
         Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
 
-            IconButton(onClick = onBack) {
+            IconButton(
+                onClick = onBack,
+                modifier = Modifier.size(24.dp)
+            ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowBack,
                     contentDescription = "Back",
@@ -166,9 +193,10 @@ fun MultiLinkBarcodeScreen(
                 )
             }
 
+            Spacer(modifier = Modifier.width(16.dp))
             Text(
                 text = "Generate Multi-Link Barcode",
-                fontSize = 20.sp,
+                fontSize = 22.sp,
                 fontWeight = FontWeight.Bold,
                 color = Brand
             )
@@ -282,7 +310,17 @@ fun MultiLinkBarcodeScreen(
             text = if (isLoading) "Generating…" else "Generate Smart Barcode",
             isLoading = isLoading,
             enabled = !disabled,
-            onClick = { onGenerate(buildPayload(form)) },
+            onClick = {
+                if (SubscriptionPlanLimits.isMeteredFeatureExhausted(
+                        sessionManager.getSubscriptionData(),
+                        SubscriptionFeatureKeys.MULTI_URL
+                    )
+                ) {
+                    showMultiLinkLimitDialog = true
+                    return@PrimaryButton
+                }
+                onGenerate(buildPayload(form))
+            },
         )
 
         // ── Preview & stats card ───────────────────────────────────────────
@@ -406,6 +444,13 @@ fun MultiLinkBarcodeScreen(
                 }
             }
         }
+
+        GenerationLimitAlertDialog(
+            visible = showMultiLinkLimitDialog,
+            message = SubscriptionLimitMessages.MULTI_URL,
+            onDismiss = { showMultiLinkLimitDialog = false },
+            onUpgrade = onNavigateToSubscription,
+        )
 
     }
 }

@@ -27,17 +27,20 @@ import coil3.compose.AsyncImage
 import components.AppSwitch
 import components.InputField
 import components.PrimaryButton
-import core.network.models.AuditDetails
 import core.network.models.FetchAi
+import core.network.models.GenerationLogRequest
 import core.network.repository.AppRepository
 import core.storage.SessionManager
 import core.storage.getLocalStorage
+import features.app.subscription.BillingRepository
+import features.app.subscription.GenerationLimitAlertDialog
+import features.app.subscription.SubscriptionFeatureKeys
+import features.app.subscription.SubscriptionLimitMessages
+import features.app.subscription.SubscriptionPlanLimits
 import kotlinx.coroutines.launch
 import utils.DeviceLocationProvider
 import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
-import core.network.models.AuditLogRequest
-import core.network.models.LocationDetailsPayload
 
 
 // ─── Theme ────────────────────────────────────────────────────────────────────
@@ -138,6 +141,7 @@ fun GS1DigitalBarcodeScreen(
     errorMessage: String? = null,
     onErrorDismiss: () -> Unit = {},
     onBack: () -> Unit = {},
+    onNavigateToSubscription: () -> Unit = {},
 ) {
     val sessionManager = SessionManager(getLocalStorage())
     val locationProvider = remember { DeviceLocationProvider() }
@@ -152,6 +156,7 @@ fun GS1DigitalBarcodeScreen(
 
     var barcodeImageUrl by remember { mutableStateOf<String?>(null) }
     var isGenerating by remember { mutableStateOf(false) }
+    var showGenerationLimitDialog by remember { mutableStateOf(false) }
 
     LaunchedEffect(Unit) {
         val result = AppRepository.fetchAI()
@@ -185,18 +190,22 @@ fun GS1DigitalBarcodeScreen(
             .fillMaxSize()
             .background(Background)
             .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp, vertical = 24.dp),
+            .padding(horizontal = 16.dp),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
+        Spacer(modifier = Modifier.height(25.dp))
 
         // ── Page title ─────────────────────────────────────────────────────
         Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
 
             IconButton(
-                onClick = onBack
+                onClick = onBack,
+                modifier = Modifier.size(24.dp)
             ) {
                 Icon(
                     imageVector = Icons.AutoMirrored.Filled.ArrowBack, // ✅ better for RTL
@@ -205,9 +214,10 @@ fun GS1DigitalBarcodeScreen(
                 )
             }
 
+            Spacer(modifier = Modifier.width(16.dp))
             Text(
                 text = "Create GS1 Digital Link Barcode",
-                fontSize = 20.sp,
+                fontSize = 22.sp,
                 fontWeight = FontWeight.Bold,
                 color = Brand,
             )
@@ -433,6 +443,15 @@ fun GS1DigitalBarcodeScreen(
             text = if (isGenerating) "Generating…" else "Generate Barcode",
             isLoading = isGenerating,
             onClick = {
+                if (SubscriptionPlanLimits.isMeteredFeatureExhausted(
+                        sessionManager.getSubscriptionData(),
+                        SubscriptionFeatureKeys.BARCODE_GENERATION
+                    )
+                ) {
+                    showGenerationLimitDialog = true
+                    return@PrimaryButton
+                }
+
                 val bcType = if (barcodeType == BarcodeType.GS1_QR_CODE)
                     "gs1dlqrcode"
                 else
@@ -452,6 +471,8 @@ fun GS1DigitalBarcodeScreen(
 
                         // 🔥 AUDIT LOG START
                         scope.launch {
+                            BillingRepository.incrementUsage(sessionManager, "barcode_generation", 1)
+                                .onFailure { println("⚠️ subscription usage: ${it.message}") }
 
                             var lat = 0.0
                             var lon = 0.0
@@ -487,37 +508,30 @@ fun GS1DigitalBarcodeScreen(
                                 }
                             }
 
-                            val companyId = sessionManager.getCompanyId()
-                            if (companyId.isNullOrEmpty()) {
+                            val companyId = sessionManager.getCompanyId()?.toIntOrNull()
+                            if (companyId == null) {
                                 println("❌ COMPANY ID MISSING")
                                 return@launch
                             }
 
-                            val auditRequest = AuditLogRequest(
-                                type = 1,
+                            val generationRequest = GenerationLogRequest(
+                                barcode_type = if (barcodeType == BarcodeType.GS1_QR_CODE)
+                                    "GS1-DL QR Code" else "GS1-DL DataMatrix",
+                                barcode_data = url,
                                 company_id = companyId,
-                                user_id = sessionManager.getUserId()?.toString() ?: "",
-                                location_details = LocationDetailsPayload(
-                                    lat = lat,
-                                    long = lon,
-                                    currentCity = city,
-                                    state = state
-                                ),
-                                details = AuditDetails(
-                                    barcode = url,   // 🔥 IMPORTANT (Digital Link URL)
-                                    status = "generated",
-                                    barcodeType = if (barcodeType == BarcodeType.GS1_QR_CODE)
-                                        "GS1-DL QR Code" else "GS1-DL DataMatrix",
-                                    device = "Android",
-                                    timestamp = Clock.System.now().toString()
-                                )
+                                lat = lat,
+                                long = lon,
+                                event_id = core.util.newGenerationEventId(),
+                                serial = core.util.extractGs1Serial(url),
+                                batch = core.util.extractGs1Batch(url),
+                                device_type = "android"
                             )
 
                             println("🚀 DIGITAL LINK AUDIT:")
                             println("📦 URL: $url")
                             println("📍 lat: $lat, lon: $lon")
 
-                            val auditResult = AppRepository.sendAuditLog(auditRequest)
+                            val auditResult = AppRepository.sendGenerationLog(generationRequest)
 
                             if (auditResult.isSuccess) {
                                 println("✅ DIGITAL LINK AUDIT SUCCESS")
@@ -618,6 +632,13 @@ fun GS1DigitalBarcodeScreen(
                 },
             )
         }
+
+        GenerationLimitAlertDialog(
+            visible = showGenerationLimitDialog,
+            message = SubscriptionLimitMessages.BARCODE_GENERATION,
+            onDismiss = { showGenerationLimitDialog = false },
+            onUpgrade = onNavigateToSubscription,
+        )
     }
 }
 

@@ -1,12 +1,15 @@
 package com.app.sakkshasset
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.only
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.safeDrawing
 import androidx.compose.foundation.layout.windowInsetsPadding
+import androidx.compose.foundation.layout.WindowInsetsSides
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.SnackbarHost
@@ -14,14 +17,17 @@ import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
+import androidx.navigation.compose.currentBackStackEntryAsState
 import androidx.navigation.compose.rememberNavController
 import core.storage.SessionManager
 import core.storage.getLocalStorage
@@ -35,17 +41,22 @@ import features.app.generations.GS12DBarcode
 import features.app.generations.GS1DigitalBarcodeScreen
 import features.app.generations.GenerateCodeScreen
 import features.app.scans.Scans
+import features.app.subscription.SubscriptionScreen
 import features.auth.OtpScreen
+import kotlinx.datetime.Clock
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import navigation.AppScreen
 import navigation.appscreen.Screens
 import network.models.UserDetail
 import network.repository.AuthRepository
 import screens.MultiLinkBarcodeScreen
+import kotlin.system.exitProcess
 
 @Composable
 fun App() {
@@ -62,6 +73,9 @@ fun App() {
 
     val sessionManager = remember { SessionManager(getLocalStorage()) }
     val json = remember { Json { ignoreUnknownKeys = true } }
+    val navBackStackEntry by navController.currentBackStackEntryAsState()
+    val currentRoute = navBackStackEntry?.destination?.route
+    var lastBackPressAt by remember { mutableLongStateOf(0L) }
 
     var selectedBarcodeType: DynamicBarcodeType? by remember {
         mutableStateOf(null)
@@ -80,22 +94,50 @@ fun App() {
 
     MaterialTheme {
         Scaffold(
-            contentWindowInsets = WindowInsets(0)
+            containerColor = Color.White,
+            contentColor = Color.Black,
+            contentWindowInsets = WindowInsets(0),
+            snackbarHost = { SnackbarHost(hostState = snackbarHostState) }
         ) { paddingValues ->
+            BackHandler(enabled = currentRoute == Screens.HomeScreen.destRoute) {
+                val now = Clock.System.now().toEpochMilliseconds()
+                if (now - lastBackPressAt < 2000L) {
+                    exitProcess(0)
+                } else {
+                    lastBackPressAt = now
+                    scope.launch {
+                        snackbarHostState.showSnackbar("Press back again to exit")
+                    }
+                }
+            }
+
             NavHost(
                 navController = navController,
                 startDestination = Screens.SplashScreen.destRoute,
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(paddingValues)
-                    .background(MaterialTheme.colorScheme.surface),
+                    .windowInsetsPadding(WindowInsets.safeDrawing.only(WindowInsetsSides.Top))
+                    .background(Color.White),
             ) {
                 composable(Screens.SplashScreen.destRoute) {
                     InitialScreen {
                         if (sessionManager.isLoggedIn() && sessionManager.getUserDetail() != null) {
-                            navController.navigate(Screens.HomeScreen.destRoute)
+                            val hasSubscription =
+                                sessionManager.getSubscriptionStatus()?.equals("active", ignoreCase = true) == true
+                            navController.navigate(if (hasSubscription) {
+                                Screens.HomeScreen.destRoute
+                            } else {
+                                Screens.SubscriptionScreen.destRoute
+                            }) {
+                                popUpTo(Screens.SplashScreen.destRoute) { inclusive = true }
+                                launchSingleTop = true
+                            }
                         } else {
-                            navController.navigate(Screens.LoginScreen.destRoute)
+                            navController.navigate(Screens.LoginScreen.destRoute) {
+                                popUpTo(Screens.SplashScreen.destRoute) { inclusive = true }
+                                launchSingleTop = true
+                            }
                         }
                     }
                 }
@@ -132,10 +174,81 @@ fun App() {
                                         userEmail = response.userEmail,
                                         userDetail = userDetailJson
                                     )
-                                    sessionManager.saveCompanyId(response.userDetail.companyId.toString())
+                                    val locationDetailsJson = response.locationDetails
+                                        ?.let { json.encodeToString(it) }
+                                        .orEmpty()
+                                    sessionManager.saveLocationDetails(locationDetailsJson)
+                                    println("LOCATION_LOG: saved ${response.locationDetails?.size ?: 0} location detail records")
+                                    val prettyLocationDetails = if (locationDetailsJson.isBlank()) {
+                                        "[]"
+                                    } else {
+                                        runCatching {
+                                            val element =
+                                                kotlinx.serialization.json.Json.parseToJsonElement(locationDetailsJson)
+                                            kotlinx.serialization.json.Json {
+                                                prettyPrint = true; prettyPrintIndent = "  "
+                                            }.encodeToString(
+                                                kotlinx.serialization.json.JsonElement.serializer(),
+                                                element
+                                            )
+                                        }.getOrElse { locationDetailsJson }
+                                    }
+                                    println("LOCATION_DETAILS_FULL_LOG_JSON:\n$prettyLocationDetails")
 
+                                    val companyIdFromUserDetail = response.userDetail.companyId
+                                    val companyIdFromSubscription = response.subscription?.companyId ?: 0
+                                    val companyIdFromRawUserDetail = runCatching {
+                                        val obj = json.parseToJsonElement(userDetailJson).jsonObject
+                                        obj["companyid"]?.jsonPrimitive?.content?.toIntOrNull()
+                                            ?: obj["company_id"]?.jsonPrimitive?.content?.toIntOrNull()
+                                    }.getOrNull() ?: 0
+
+                                    val finalCompanyId = when {
+                                        companyIdFromUserDetail > 0 -> companyIdFromUserDetail
+                                        companyIdFromSubscription > 0 -> companyIdFromSubscription
+                                        companyIdFromRawUserDetail > 0 -> companyIdFromRawUserDetail
+                                        else -> 0
+                                    }
+
+                                    if (finalCompanyId > 0) {
+                                        sessionManager.saveCompanyId(finalCompanyId.toString())
+                                    }
+
+                                    val otpSubscription = response.subscription
+                                    val storedStatus = otpSubscription?.status
+                                        ?: response.userDetail.subscriptionStatus
+                                        ?: ""
+                                    val storedPlanId = otpSubscription?.planId
+                                        ?: response.userDetail.subscriptionPlan
+                                        ?: ""
+                                    val storedRawJson = when {
+                                        otpSubscription != null -> json.encodeToString(otpSubscription)
+                                        response.userDetail.subscriptionData != null -> response.userDetail.subscriptionData.toString()
+                                        else -> ""
+                                    }
+
+                                    sessionManager.saveSubscription(
+                                        rawJson = storedRawJson,
+                                        status = storedStatus,
+                                        planId = storedPlanId
+                                    )
+
+                                    val hasActiveSubscription =
+                                        (otpSubscription?.isActive == true) ||
+                                            storedStatus.equals("active", ignoreCase = true)
+
+                                    if (hasActiveSubscription) {
+                                        navController.navigate(Screens.HomeScreen.destRoute) {
+                                            popUpTo(Screens.LoginScreen.destRoute) { inclusive = true }
+                                            launchSingleTop = true
+                                        }
+                                    } else {
+                                        navController.navigate(Screens.SubscriptionScreen.destRoute) {
+                                            popUpTo(Screens.LoginScreen.destRoute) { inclusive = true }
+                                            launchSingleTop = true
+                                        }
+                                    }
                                     isLoading = false
-                                    navController.navigate(Screens.HomeScreen.destRoute)
                                 }
 
                                 result.onFailure { error ->
@@ -185,6 +298,9 @@ fun App() {
                     GS12DBarcode(
                         onBack = {
                             navController.popBackStack()
+                        },
+                        onNavigateToSubscription = {
+                            navController.navigate(Screens.SubscriptionScreen.destRoute)
                         }
                     )
                 }
@@ -193,6 +309,9 @@ fun App() {
                     GS1DigitalBarcodeScreen(
                         onBack = {
                             navController.popBackStack()
+                        },
+                        onNavigateToSubscription = {
+                            navController.navigate(Screens.SubscriptionScreen.destRoute)
                         }
                     )
                 }
@@ -201,6 +320,9 @@ fun App() {
                     MultiLinkBarcodeScreen(
                         onBack = {
                             navController.popBackStack()
+                        },
+                        onNavigateToSubscription = {
+                            navController.navigate(Screens.SubscriptionScreen.destRoute)
                         }
                     )
                 }
@@ -211,6 +333,9 @@ fun App() {
                             barcodeType = type,
                             onBack = {
                                 navController.popBackStack()
+                            },
+                            onNavigateToSubscription = {
+                                navController.navigate(Screens.SubscriptionScreen.destRoute)
                             },
                         )
                     }
@@ -228,6 +353,16 @@ fun App() {
                     Assets(
                         onNavigate = { screen ->
                             navController.navigate(screen)
+                        }
+                    )
+                }
+
+                composable(Screens.SubscriptionScreen.destRoute) {
+                    SubscriptionScreen(
+                        onSubscribed = {
+                            navController.navigate(Screens.HomeScreen.destRoute) {
+                                popUpTo(Screens.SubscriptionScreen.destRoute) { inclusive = true }
+                            }
                         }
                     )
                 }
@@ -304,7 +439,7 @@ fun App() {
                 AppScreen.Home,
                 AppScreen.History,
                 AppScreen.Scan,
-                AppScreen.Upgrade,
+                AppScreen.Analytics,
                 AppScreen.Profile -> {
                     MainAppScreen(
                         initialTab = currentScreen,

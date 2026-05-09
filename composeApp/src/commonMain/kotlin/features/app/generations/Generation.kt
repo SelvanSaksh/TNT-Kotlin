@@ -9,6 +9,7 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.ArrowForward
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -19,6 +20,12 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import core.storage.SessionManager
+import core.storage.getLocalStorage
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import navigation.AppScreen
 import navigation.appscreen.Screens
 
@@ -28,7 +35,27 @@ fun GenerateCodeScreen(
     onNavigate: (String) -> Unit,
     onNavigateBarcode: (DynamicBarcodeType) -> Unit
 ) {
+    val sessionManager = remember { SessionManager(getLocalStorage()) }
     var selectedTab by remember { mutableStateOf(0) }
+    var showLockedDialog by remember { mutableStateOf(false) }
+
+    val isMultiUrlIncluded = remember {
+        val raw = sessionManager.getSubscriptionData().orEmpty()
+        if (raw.isBlank()) {
+            false
+        } else {
+            runCatching {
+                val root = Json.parseToJsonElement(raw).jsonObject
+                val features = root["features"]?.jsonObject
+                features?.get("multi_url")?.let { value ->
+                    when {
+                        value is kotlinx.serialization.json.JsonPrimitive -> value.booleanOrNull == true
+                        else -> value.jsonObject["enabled"]?.jsonPrimitive?.booleanOrNull == true
+                    }
+                } ?: false
+            }.getOrDefault(false)
+        }
+    }
 
     val tabs = listOf("GS1 Code", "2D Code", "1D / Others")
     val primaryColor = Color(0xFF163C66)
@@ -141,11 +168,17 @@ fun GenerateCodeScreen(
             }
 
             options.forEach { (option, icon) ->
+                val isLocked = option == "Multi URL" && !isMultiUrlIncluded
                 OptionCard(
                     title = option,
                     icon = icon,
+                    isLocked = isLocked,
                     primaryColor = primaryColor,
                     onClick = {
+                        if (isLocked) {
+                            showLockedDialog = true
+                            return@OptionCard
+                        }
 
                         when (option) {
 
@@ -182,12 +215,26 @@ fun GenerateCodeScreen(
             }
         }
     }
+
+    if (showLockedDialog) {
+        AlertDialog(
+            onDismissRequest = { showLockedDialog = false },
+            title = { Text("Feature Locked") },
+            text = { Text("This feature is not included in your current plan. Upgrade is required.") },
+            confirmButton = {
+                TextButton(onClick = { showLockedDialog = false }) {
+                    Text("OK")
+                }
+            }
+        )
+    }
 }
 
 @Composable
 fun OptionCard(
     title: String,
     icon: ImageVector,
+    isLocked: Boolean,
     primaryColor: Color,
     onClick: () -> Unit
 ) {
@@ -236,13 +283,21 @@ fun OptionCard(
                         fontWeight = FontWeight.Medium
                     )
                 }
-                // Arrow
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowForward,
-                    contentDescription = "Navigate",
-                    tint = primaryColor,
-                    modifier = Modifier.size(20.dp)
-                )
+                if (isLocked) {
+                    Icon(
+                        imageVector = Icons.Outlined.Lock,
+                        contentDescription = "Locked",
+                        tint = Color(0xFFB91C1C),
+                        modifier = Modifier.size(20.dp)
+                    )
+                } else {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowForward,
+                        contentDescription = "Navigate",
+                        tint = primaryColor,
+                        modifier = Modifier.size(20.dp)
+                    )
+                }
             }
         }
     }

@@ -7,7 +7,7 @@ enum class AppScreen {
     Home,
     History,
     Scan,
-    Upgrade,
+    Analytics,
     Profile,
     GenerateCodeScreen,
     GS12DBarcode,

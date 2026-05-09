@@ -14,6 +14,7 @@ sealed class Screens (val destRoute: String, val navArgument: List<NamedNavArgum
     data object MultiLinkBarcodeScreen : Screens("MultiLinkBarcodeScreen")
     data object CommonBarcodeScreen : Screens("CommonBarcodeScreen")
     data object Assets : Screens("Assets")
+    data object SubscriptionScreen : Screens("subscription_screen")
 
 
 
