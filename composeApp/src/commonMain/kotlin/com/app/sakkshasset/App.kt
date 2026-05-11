@@ -113,7 +113,7 @@ fun App() {
 
             NavHost(
                 navController = navController,
-                startDestination = Screens.SplashScreen.destRoute,
+                startDestination = Screens.HomeScreen.destRoute,
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(paddingValues)

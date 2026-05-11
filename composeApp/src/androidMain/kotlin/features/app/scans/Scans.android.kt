@@ -31,6 +31,7 @@ import core.storage.SessionManager
 import core.storage.getLocalStorage
 import dialog.AuthenticProductDialog
 import dialog.parseScanResponse
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
@@ -318,6 +319,10 @@ actual fun ScannerView(
                                 "SCANNERLOG",
                                 "[VERIFY] ✓ AuthenticProductDialog trigger incremented (dialogTrigger=$dialogTrigger)"
                             )
+                            scope.launch {
+                                delay(2000)
+                                controller?.shouldResumeScanning = true
+                            }
                         },
 
 //                        result = {
@@ -330,6 +335,11 @@ actual fun ScannerView(
                                 "[VERIFY] ❌ SDK error callback code=${err.first} message=${err.second}"
                             )
                             Toast.makeText(context, "Error data received : ${err.second}", Toast.LENGTH_SHORT).show()
+
+                            scope.launch {
+                                delay(3000)
+                                controller?.shouldResumeScanning = true
+                            }
                         }
                     )
 

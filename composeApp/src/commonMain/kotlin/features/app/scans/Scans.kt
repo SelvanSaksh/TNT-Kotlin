@@ -33,7 +33,7 @@ fun Scans(
 ) {
     var verifyAuthenticity by remember { mutableStateOf(true) }
     var isMultiScan by remember { mutableStateOf(false) }
-    var showMoreSheet by remember { mutableStateOf(false) }
+//    var showMoreSheet by remember { mutableStateOf(false) }
 
     var currentScanMode by remember { mutableStateOf("VERIFY") }
     var scannedResult by remember { mutableStateOf<String?>(null) }
@@ -188,6 +188,7 @@ fun Scans(
         }
         
         // Back button
+/*
         IconButton(
             onClick = { onNavigate(Screens.HomeScreen.destRoute) },
             modifier = Modifier
@@ -216,6 +217,7 @@ fun Scans(
                 tint = White
             )
         }
+*/
 
 /*        Box(
             modifier = Modifier
@@ -232,7 +234,7 @@ fun Scans(
         }*/
     }
 
-    @OptIn(ExperimentalMaterial3Api::class)
+/*    @OptIn(ExperimentalMaterial3Api::class)
     if (showMoreSheet) {
         ModalBottomSheet(
             onDismissRequest = { showMoreSheet = false },
@@ -304,7 +306,7 @@ fun Scans(
                 Spacer(Modifier.height(8.dp))
             }
         }
-    }
+    }*/
 }
 
 @Composable
