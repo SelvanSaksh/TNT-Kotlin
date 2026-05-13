@@ -127,31 +127,92 @@ actual fun ScannerView(
     /**
      * Extracts the GS1 identifiers (GTIN / serial / batch) from a SDK scan response.
      *
-     * Response shape (per [parseScanResponse]):
-     *   [{ "gs1_data": { "01": {"name":"GTIN","value":"..."},
-     *                    "21": {"name":"Serial","value":"..."},
-     *                    "10": {"name":"Batch/Lot","value":"..."} }, ... }]
+     * Supports two response shapes:
+     *
+     *  Legacy nested:
+     *    [{ "gs1_data": { "01": {"name":"GTIN","value":"..."},
+     *                     "21": {"name":"Serial","value":"..."},
+     *                     "10": {"name":"Batch/Lot","value":"..."} } }]
+     *
+     *  Current flat AI list:
+     *    [{"ai":"01","description":"GTIN","value":"..."},
+     *     {"ai":"10","description":"Batch/Lot Number","value":"..."},
+     *     {"ai":"21","description":"Serial Number","value":"..."}]
+     *
+     * Also falls back to parsing AIs from a parenthesized GS1 URL string when
+     * the SDK returned nothing structured (e.g. raw barcode in SINGLE mode).
      */
     fun extractGs1Identifiers(scannedValue: String): Triple<String, String, String> {
         val trimmed = scannedValue.trim()
         return try {
-            val obj: JSONObject? = when {
+            when {
                 trimmed.startsWith("[") -> {
                     val arr = JSONArray(trimmed)
-                    if (arr.length() == 0) null else arr.optJSONObject(0)
-                }
-                trimmed.startsWith("{") -> JSONObject(trimmed)
-                else -> null
-            }
-            val gs1 = obj?.optJSONObject("gs1_data") ?: return Triple("", "", "")
+                    if (arr.length() == 0) return Triple("", "", "")
+                    val first = arr.optJSONObject(0) ?: return Triple("", "", "")
 
-            val gtin = gs1.optJSONObject("01")?.optString("value").orEmpty()
-            val serial = gs1.optJSONObject("21")?.optString("value").orEmpty()
-            val batch = gs1.optJSONObject("10")?.optString("value").orEmpty()
-            Triple(gtin, serial, batch)
+                    // Current flat shape: [{"ai":..., "value":...}, ...]
+                    if (first.has("ai") && first.has("value")) {
+                        var gtin = ""
+                        var serial = ""
+                        var batch = ""
+                        for (i in 0 until arr.length()) {
+                            val item = arr.optJSONObject(i) ?: continue
+                            when (item.optString("ai")) {
+                                "01" -> gtin = item.optString("value")
+                                "21" -> serial = item.optString("value")
+                                "10" -> batch = item.optString("value")
+                            }
+                        }
+                        return Triple(gtin, serial, batch)
+                    }
+
+                    // Legacy nested shape
+                    val gs1 = first.optJSONObject("gs1_data") ?: return Triple("", "", "")
+                    val gtin = gs1.optJSONObject("01")?.optString("value").orEmpty()
+                    val serial = gs1.optJSONObject("21")?.optString("value").orEmpty()
+                    val batch = gs1.optJSONObject("10")?.optString("value").orEmpty()
+                    Triple(gtin, serial, batch)
+                }
+                trimmed.startsWith("{") -> {
+                    val obj = JSONObject(trimmed)
+                    val gs1 = obj.optJSONObject("gs1_data") ?: return Triple("", "", "")
+                    val gtin = gs1.optJSONObject("01")?.optString("value").orEmpty()
+                    val serial = gs1.optJSONObject("21")?.optString("value").orEmpty()
+                    val batch = gs1.optJSONObject("10")?.optString("value").orEmpty()
+                    Triple(gtin, serial, batch)
+                }
+                else -> Triple("", "", "")
+            }
         } catch (_: Exception) {
             Triple("", "", "")
         }
+    }
+
+    /**
+     * Parses AIs directly from a GS1 Digital Link URL or parenthesized element
+     * string, e.g. `https://dl.ratifye.ai/01/18907001962025/10/GTG1897A?...`
+     * or `(01)18907001962025(10)GTG1897A(21)SN001`.
+     *
+     * Used as a fallback when the SDK didn't deliver a structured payload.
+     */
+    fun extractGs1IdentifiersFromUrl(raw: String): Triple<String, String, String> {
+        if (raw.isBlank()) return Triple("", "", "")
+        var gtin = ""
+        var serial = ""
+        var batch = ""
+
+        // Path-style: /01/<gtin>/10/<batch>/21/<serial>
+        Regex("""/01/([^/?#]+)""").find(raw)?.groupValues?.getOrNull(1)?.let { gtin = it }
+        Regex("""/10/([^/?#]+)""").find(raw)?.groupValues?.getOrNull(1)?.let { batch = it }
+        Regex("""/21/([^/?#]+)""").find(raw)?.groupValues?.getOrNull(1)?.let { serial = it }
+
+        // Parenthesized: (01)<gtin>(10)<batch>(21)<serial>
+        if (gtin.isBlank()) Regex("""\(01\)([^()]+)""").find(raw)?.groupValues?.getOrNull(1)?.let { gtin = it.trim() }
+        if (batch.isBlank()) Regex("""\(10\)([^()]+)""").find(raw)?.groupValues?.getOrNull(1)?.let { batch = it.trim() }
+        if (serial.isBlank()) Regex("""\(21\)([^()]+)""").find(raw)?.groupValues?.getOrNull(1)?.let { serial = it.trim() }
+
+        return Triple(gtin, serial, batch)
     }
 
     fun sendScanLog(scannedValue: String, epcCandidate: String, scanMode: String) {
@@ -205,9 +266,13 @@ actual fun ScannerView(
                 }
             Log.d(tag, "[$scanMode] sendScanLog() ✓ companyId=$companyId")
 
-            val (gtin, serial, batch) = extractGs1Identifiers(scannedValue)
-            // Fall back to the raw scanned value when GS1 parsing yields no GTIN
-            // (e.g. plain SINGLE-mode barcodes like "ABC-1234" without gs1_data).
+            val (parsedGtin, parsedSerial, parsedBatch) = extractGs1Identifiers(scannedValue)
+            // Fall back to parsing the raw URL (e.g. `https://dl.ratifye.ai/01/<gtin>/10/<batch>?...`)
+            // when the SDK payload didn't include structured AIs.
+            val (urlGtin, urlSerial, urlBatch) = extractGs1IdentifiersFromUrl(epcCandidate)
+            val gtin = parsedGtin.ifBlank { urlGtin }
+            val serial = parsedSerial.ifBlank { urlSerial }
+            val batch = parsedBatch.ifBlank { urlBatch }
             val epcId = gtin.ifBlank { epcCandidate.ifBlank { scannedValue.trim() } }
             val geoLocation = "$lat,$lon"
             Log.d(
@@ -277,12 +342,8 @@ actual fun ScannerView(
             when (scanMode) {
 
                 "VERIFY" -> {
-                    Log.d(
-                        "SCANNERLOG",
-                        "[VERIFY] ▶ ScannerView factory CALLED — building CommonScannerView (authentication flow)"
-                    )
+
                     val view = CommonScannerView(ctx)
-                    Log.d("SCANNERLOG", "[VERIFY] ✓ CommonScannerView instantiated, wiring ScannerController…")
                     controller = ScannerController(
                         singleScannerView = null,
                         verificationScanner = null,
@@ -292,21 +353,14 @@ actual fun ScannerView(
                         lifecycleOwner = lifecycleOwner,
                         fragmentManager = fragmentManager,
                         openGallery = {
-                            Log.d("SCANNERLOG", "[VERIFY] ▶ openGallery requested by SDK")
                             galleryLauncher.launch("image/*")
                         },
                         result = { scanResult ->
 
                             rawData = scanResult.first
                             val scannedValue = scanResult.second.toString()
-                            Log.d(
-                                "SCANNERLOG",
-                                "[VERIFY] ✓ SDK result callback fired rawDataLen=${rawData.length} rawData='${rawData.take(80)}' scannedValueLen=${scannedValue.length} scannedValuePreview='${scannedValue.take(120)}'"
-                            )
-                            println("📦 SCANNED VALUE: $scannedValue")
-
+                            print("SDK VALUE:"+scannedValue)
                             onScanResult(scannedValue)
-                            Log.d("SCANNERLOG", "[VERIFY] ▶ forwarding to sendScanLog()")
                             sendScanLog(
                                 scannedValue = scannedValue,
                                 epcCandidate = rawData,
@@ -315,10 +369,7 @@ actual fun ScannerView(
 
                             jsonResponse.value = scannedValue
                             dialogTrigger++
-                            Log.d(
-                                "SCANNERLOG",
-                                "[VERIFY] ✓ AuthenticProductDialog trigger incremented (dialogTrigger=$dialogTrigger)"
-                            )
+
                             scope.launch {
                                 delay(2000)
                                 controller?.shouldResumeScanning = true
@@ -345,6 +396,7 @@ actual fun ScannerView(
 
                     Log.d("SCANNERLOG", "[VERIFY] ▶ controller.startCommonScanner(userId=1, companyId=48)")
                     controller?.startCommonScanner(ctx, "1", "48")
+                    controller?.isVerifyEnabled
                     Log.d("SCANNERLOG", "[VERIFY] ✓ startCommonScanner() returned, view ready")
                     view
                 }
@@ -414,11 +466,13 @@ actual fun ScannerView(
                         },
                         result = { scanResult ->
                             rawData = scanResult.first
+                            val authRes = scanResult.second
                             val scannedValue = scanResult.second.toString()
                             Log.d(
                                 "SCANNERLOG",
-                                "[AUTH] ✓ SDK result callback fired rawDataLen=${rawData.length} rawData='${rawData.take(80)}' scannedValueLen=${scannedValue.length} scannedValuePreview='${scannedValue.take(120)}'"
+                                "[AUTH] Result${authRes}"
                             )
+
                             onScanResult(scannedValue)
                             Log.d("SCANNERLOG", "[AUTH] ▶ forwarding to sendScanLog()")
                             sendScanLog(
@@ -479,7 +533,7 @@ actual fun ScannerView(
 
     if (scanMode == "VERIFY" && dialogTrigger > 0) {
         jsonResponse.value?.let { json ->
-            parseScanResponse(jsonString = json)?.let { result ->
+            parseScanResponse(jsonString = json, rawData = rawData)?.let { result ->
                 AuthenticProductDialog(
                     raw = rawData,
                     result = result,

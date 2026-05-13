@@ -87,18 +87,61 @@ data class ScanResult(
  *   val result: ScanResult? = parseScanResponse(jsonString)
  *   if (result != null) { /* show dialog */ }
  */
-fun parseScanResponse(jsonString: String): ScanResult? {
+/**
+ * Maps the scanner SDK response into a [ScanResult] for the dialog.
+ *
+ * Two shapes from the SDK are supported — we only deserialize, never
+ * re-interpret. Anything the SDK didn't ship (e.g. `quality`,
+ * `encrypted_text`) stays at its SDK-provided value.
+ *
+ *  Legacy:
+ *    [{ "barcode_data": "...", "gs1_data": { "01": {...} }, "encrypted_text": "...", "quality": "Real" }]
+ *
+ *  Current (flat AI list):
+ *    [{"ai":"01","description":"GTIN","value":"..."}, {"ai":"10","description":"Batch/Lot Number","value":"..."}, ...]
+ *
+ * [rawData] is the raw scanned string from `scanResult.first` and is only
+ * used as the `barcode_data` for the flat-list shape (which doesn't carry
+ * one of its own). No fields are derived from it.
+ */
+fun parseScanResponse(jsonString: String, rawData: String? = null): ScanResult? {
     return try {
         val array = JSONArray(jsonString)
         if (array.length() == 0) return null
 
-        val obj: JSONObject = array.getJSONObject(0)
+        val first = array.getJSONObject(0)
+        val isFlatAiList = first.has("ai") && first.has("value")
+
+        if (isFlatAiList) {
+            val gs1Fields = mutableListOf<Gs1Field>()
+            for (i in 0 until array.length()) {
+                val item = array.optJSONObject(i) ?: continue
+                val ai = item.optString("ai").ifBlank { continue }
+                gs1Fields.add(
+                    Gs1Field(
+                        ai = ai,
+                        name = item.optString("description")
+                            .ifBlank { item.optString("name", ai) },
+                        value = item.optString("value", "—")
+                    )
+                )
+            }
+
+            return ScanResult(
+                barcodeData = rawData.orEmpty(),
+                gs1Fields = gs1Fields,
+                encryptedText = "",
+                quality = ""
+            )
+        }
+
+        // ── Legacy nested shape ─────────────────────────────────────────────
+        val obj: JSONObject = first
 
         val barcodeData   = obj.optString("barcode_data", "")
         val encryptedText = obj.optString("encrypted_text", "")
-        val quality       = obj.optString("quality", "Unknown")
+        val quality       = obj.optString("quality", "")
 
-        // gs1_data is a JSON object whose keys are AI numbers
         val gs1Object: JSONObject = obj.optJSONObject("gs1_data") ?: JSONObject()
         val gs1Fields = mutableListOf<Gs1Field>()
 
