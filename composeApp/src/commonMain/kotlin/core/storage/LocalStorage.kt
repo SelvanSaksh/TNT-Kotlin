@@ -90,8 +90,11 @@ class SessionManager(private val storage: LocalStorage) {
 
     fun getLocationDetails(): String? = storage.getString(StorageKeys.LOCATION_DETAILS)
 
+    /** True only after OTP verification stored a token and user profile (not mid-login). */
     fun isLoggedIn(): Boolean {
-        return getAccessToken() != null
+        val token = getAccessToken()?.trim().orEmpty()
+        val detail = getUserDetail()?.trim().orEmpty()
+        return token.isNotEmpty() && detail.isNotEmpty()
     }
 
     fun clearSession() {

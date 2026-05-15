@@ -116,7 +116,9 @@ data class RazorpayOrderPayload(
     val id: String,
     val entity: String,
     val amount: Int,
-    val currency: String
+    val currency: String,
+    /** Razorpay / DB order row lifecycle. Create-order must return `created` before checkout or verify. */
+    val status: String? = null,
 )
 
 @Serializable

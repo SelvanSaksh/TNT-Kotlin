@@ -12,8 +12,12 @@ data class SendOtpRequest(
 
 @Serializable
 data class SendOtpResponse(
-    val isAutoGen: Boolean,
-    val otp: String,
+    val isAutoGen: Boolean = false,
+    /**
+     * Present only in some environments. Production may omit this; the user
+     * receives the OTP via realtime message (SMS / email) instead.
+     */
+    val otp: String? = null,
     val expiresAt: String,
     val email: String,
     val userId: Int

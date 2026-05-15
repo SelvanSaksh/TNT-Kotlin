@@ -113,7 +113,7 @@ fun App() {
 
             NavHost(
                 navController = navController,
-                startDestination = Screens.HomeScreen.destRoute,
+                startDestination = Screens.SplashScreen.destRoute,
                 modifier = Modifier
                     .fillMaxSize()
                     .padding(paddingValues)
@@ -122,7 +122,7 @@ fun App() {
             ) {
                 composable(Screens.SplashScreen.destRoute) {
                     InitialScreen {
-                        if (sessionManager.isLoggedIn() && sessionManager.getUserDetail() != null) {
+                        if (sessionManager.isLoggedIn()) {
                             val hasSubscription =
                                 sessionManager.getSubscriptionStatus()?.equals("active", ignoreCase = true) == true
                             navController.navigate(if (hasSubscription) {
@@ -146,7 +146,8 @@ fun App() {
                     LoginScreen(
                         onNavigateToOtp = { identifier, otpResponse ->
                             userIdentifier = identifier
-                            autoOtp = if (otpResponse.isAutoGen) otpResponse.otp else null
+                            autoOtp =
+                                if (otpResponse.isAutoGen) otpResponse.otp?.takeIf { it.isNotBlank() } else null
                             navController.navigate(Screens.OTPScreen.destRoute)
                         }
                     )
@@ -385,7 +386,8 @@ fun App() {
                     LoginScreen(
                         onNavigateToOtp = { identifier, otpResponse ->
                             userIdentifier = identifier
-                            autoOtp = if (otpResponse.isAutoGen) otpResponse.otp else null
+                            autoOtp =
+                                if (otpResponse.isAutoGen) otpResponse.otp?.takeIf { it.isNotBlank() } else null
                             currentScreen = AppScreen.Otp
                         }
                     )

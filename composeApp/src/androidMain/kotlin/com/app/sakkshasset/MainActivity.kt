@@ -11,12 +11,16 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.fragment.app.FragmentActivity
+import com.razorpay.PaymentData
+import com.razorpay.PaymentResultWithDataListener
 import core.storage.initAndroidContext
 import features.app.AppContextHolder
+import features.app.subscription.CheckoutActivityHolder
+import features.app.subscription.RazorpayCheckoutCoordinator
 import utils.PermissionType
 import utils.appContext
 
-class MainActivity : FragmentActivity() {
+class MainActivity : FragmentActivity(), PaymentResultWithDataListener {
     override fun onCreate(savedInstanceState: Bundle?) {
         enableEdgeToEdge()
         super.onCreate(savedInstanceState)
@@ -35,6 +39,24 @@ class MainActivity : FragmentActivity() {
                 }
             )
         }
+    }
+
+    override fun onStart() {
+        super.onStart()
+        CheckoutActivityHolder.attach(this)
+    }
+
+    override fun onStop() {
+        CheckoutActivityHolder.detach(this)
+        super.onStop()
+    }
+
+    override fun onPaymentSuccess(razorpayPaymentID: String?, paymentData: PaymentData?) {
+        RazorpayCheckoutCoordinator.onPaymentSuccessPublic(razorpayPaymentID, paymentData)
+    }
+
+    override fun onPaymentError(code: Int, response: String?, paymentData: PaymentData?) {
+        RazorpayCheckoutCoordinator.onPaymentErrorPublic(code, response, paymentData)
     }
 }
 

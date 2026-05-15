@@ -30,7 +30,7 @@ import kotlinx.datetime.Clock
 object BillingRepository {
 
     private const val BILLING_BASE_URL = "https://billing.sakksh.com/v1"
-    private const val RAZORPAY_KEY_ID = "rzp_live_CgNjjriG2ki7Pt"
+    private const val RAZORPAY_KEY_ID = "rzp_live_SpXl3J7uMe5WTD"
 
     // Same headers as iOS implementation.
     private val billingHeaders: Map<String, String> = mapOf(
@@ -297,27 +297,41 @@ object BillingRepository {
         }
     }
 
+    /**
+     * POST `/payments/create-order` — matches server contract:
+     * `{ "amount", "currency", "receipt", "userId", "companyId", "notes": { "plan" } }`.
+     */
     suspend fun createOrder(
-        amountInPaise: Int,
+        amountRupees: Int,
         planId: String,
         sessionManager: SessionManager,
-        currency: String = "inr"
+        currency: String = "INR"
     ): Result<RazorpayOrderPayload> {
         return try {
+            if (amountRupees <= 0) {
+                return Result.failure(SubscriptionError.InvalidAmount)
+            }
             val userId = sessionManager.getUserId()
                 ?: return Result.failure(SubscriptionError.ServerError("Missing user id"))
+            val companyIdRaw = sessionManager.getCompanyId()?.trim().orEmpty()
+                .ifBlank { return Result.failure(SubscriptionError.ServerError("Missing company id")) }
 
-            val receipt = "rcpt_${userId}_${Clock.System.now().epochSeconds}"
+            val receipt = "order_rcpt_${companyIdRaw}_${Clock.System.now().epochSeconds}"
             val payload = buildJsonObject {
-                put("amount", amountInPaise)
-                put("amountInPaise", true)
+                put("amount", amountRupees)
                 put("currency", currency)
                 put("receipt", receipt)
+                put("userId", userId)
+                val companyNumeric = companyIdRaw.toIntOrNull()
+                if (companyNumeric != null) {
+                    put("companyId", companyNumeric)
+                } else {
+                    put("companyId", companyIdRaw)
+                }
                 put(
                     "notes",
                     buildJsonObject {
-                        put("userId", userId)
-                        put("planId", planId)
+                        put("plan", planId)
                     }
                 )
             }
@@ -336,12 +350,21 @@ object BillingRepository {
             if (!decoded.success) {
                 return Result.failure(SubscriptionError.ServerError("Unable to create payment order."))
             }
-            Result.success(decoded.order)
+            val ord = decoded.order
+            if (ord.status?.equals("created", ignoreCase = true) != true) {
+                return Result.failure(
+                    SubscriptionError.ServerError(
+                        "Payment order must be in created status before checkout (got: ${ord.status ?: "missing"})."
+                    )
+                )
+            }
+            Result.success(ord)
         } catch (e: Exception) {
             Result.failure(e)
         }
     }
 
+    /** POST `/payments/verify` — only after a `created` order from [createOrder] and Razorpay success for that same `order.id`. */
     suspend fun verifyPayment(
         orderId: String,
         paymentId: String,
@@ -382,12 +405,57 @@ object BillingRepository {
         features: List<FeatureDisplayItem>,
         sessionManager: SessionManager
     ): Result<Unit> {
-        // Keep parity with Swift: Razorpay flow currently bypassed, direct subscription.
-        @Suppress("UNUSED_VARIABLE")
-        val ignoredName = planName
-        @Suppress("UNUSED_VARIABLE")
-        val ignoredAmountInRupees = price?.amount?.let { parseAmountInRupees(it) }
-        return subscribe(planId = planId, features = features, sessionManager = sessionManager)
+        if (price == null) {
+            return subscribe(planId = planId, features = features, sessionManager = sessionManager)
+        }
+
+        val rupees = parseAmountInRupees(price.amount)
+            ?: return Result.failure(SubscriptionError.InvalidAmount)
+
+        val order = createOrder(
+            amountRupees = rupees,
+            planId = planId,
+            sessionManager = sessionManager,
+            currency = price.currency.trim().ifBlank { "INR" }.uppercase()
+        ).getOrElse { return Result.failure(it) }
+
+        when (
+            val paid = presentRazorpayCheckout(
+                RazorpayCheckoutArgs(
+                    keyId = RAZORPAY_KEY_ID,
+                    orderId = order.id,
+                    businessName = "Sakksh",
+                    description = planName,
+                    customerEmail = sessionManager.getUserEmail(),
+                )
+            )
+        ) {
+            RazorpayCheckoutOutcome.Unsupported -> {
+                return subscribe(planId = planId, features = features, sessionManager = sessionManager)
+            }
+            RazorpayCheckoutOutcome.Cancelled -> {
+                return Result.failure(SubscriptionError.PaymentCancelled)
+            }
+            is RazorpayCheckoutOutcome.Error -> {
+                return Result.failure(SubscriptionError.ServerError(paid.message))
+            }
+            is RazorpayCheckoutOutcome.Success -> {
+                if (paid.orderId != order.id) {
+                    return Result.failure(
+                        SubscriptionError.ServerError(
+                            "Payment does not match the active order. Verification was not sent."
+                        )
+                    )
+                }
+                verifyPayment(
+                    orderId = paid.orderId,
+                    paymentId = paid.paymentId,
+                    signature = paid.signature,
+                    sessionManager = sessionManager
+                ).getOrElse { return Result.failure(it) }
+                return subscribe(planId = planId, features = features, sessionManager = sessionManager)
+            }
+        }
     }
 
     suspend fun subscribe(

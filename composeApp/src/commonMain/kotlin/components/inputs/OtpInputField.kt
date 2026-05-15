@@ -8,6 +8,7 @@ import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.alpha
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -19,7 +20,6 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
-import theme.DarkGray
 import theme.White
 
 @Composable
@@ -38,16 +38,23 @@ fun OtpInputField(
     val focusRequester = remember { FocusRequester() }
     var remainingSeconds by remember { mutableStateOf(resendTimerSeconds) }
     var showResendTimer by remember { mutableStateOf(false) }
-    var isAutoPopulated by remember(otp) { mutableStateOf(otp.length == length) }
+    /** True only when the field first appeared already full (e.g. dev auto-OTP). Not when the user types 6 digits. */
+    val startedWithFullOtp = remember { otp.length == length && otp.isNotEmpty() }
+    var skipAutoCompleteOnce by remember { mutableStateOf(startedWithFullOtp) }
 
-    // OTP completion - only trigger on manual input, not auto-populate
     LaunchedEffect(otp) {
-        if (otp.length == length && !isAutoPopulated) {
-            onComplete(otp)
+        if (otp.length == length) {
+            if (skipAutoCompleteOnce) {
+                skipAutoCompleteOnce = false
+            } else {
+                onComplete(otp)
+            }
         }
-        if (otp.length < length) {
-            isAutoPopulated = false
-        }
+    }
+
+    LaunchedEffect(Unit) {
+        delay(200)
+        runCatching { focusRequester.requestFocus() }
     }
 
     // Resend timer
@@ -65,42 +72,48 @@ fun OtpInputField(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.spacedBy(24.dp)
     ) {
-        // Hidden input field
-        BasicTextField(
-            value = otp,
-            onValueChange = { newValue ->
-                val filtered = newValue.filter { it.isDigit() }
-                if (filtered.length <= length) {
-                    onOtpChange(filtered)
-                }
-            },
-            modifier = Modifier
-                .size(0.dp)
-                .focusRequester(focusRequester),
-            keyboardOptions = KeyboardOptions(
-                keyboardType = KeyboardType.Number,
-                imeAction = ImeAction.Done
-            )
-        )
-
-        // OTP boxes
-        Row(
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
-            verticalAlignment = Alignment.CenterVertically
+        // Row shows digits; invisible BasicTextField on top receives taps and keyboard.
+        Box(
+            modifier = Modifier.wrapContentSize(),
+            contentAlignment = Alignment.Center
         ) {
-            repeat(length) { index ->
-                val isFilled = index < otp.length
-                val char = if (isFilled) otp[index].toString() else ""
-                val isCurrent = index == otp.length
+            Row(
+                horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                repeat(length) { index ->
+                    val isFilled = index < otp.length
+                    val char = if (isFilled) otp[index].toString() else ""
+                    val isCurrent = index == otp.length
 
-                OtpDigitBox(
-                    char = char,
-                    isFilled = isFilled,
-                    isCurrent = isCurrent,
-                    isError = isError && isFilled,
-                    onClick = { /* No action - just visual */ }
-                )
+                    OtpDigitBox(
+                        char = char,
+                        isFilled = isFilled,
+                        isCurrent = isCurrent,
+                        isError = isError && isFilled
+                    )
+                }
             }
+            BasicTextField(
+                value = otp,
+                onValueChange = { newValue ->
+                    val filtered = newValue.filter { it.isDigit() }
+                    if (filtered.length <= length) {
+                        onOtpChange(filtered)
+                    }
+                },
+                modifier = Modifier
+                    .matchParentSize()
+                    .alpha(0f)
+                    .focusRequester(focusRequester),
+                keyboardOptions = KeyboardOptions(
+                    keyboardType = KeyboardType.Number,
+                    imeAction = ImeAction.Done
+                ),
+                singleLine = true,
+                readOnly = isLoading,
+                decorationBox = { inner -> inner() }
+            )
         }
 
         // Error
@@ -148,8 +161,7 @@ private fun OtpDigitBox(
     char: String,
     isFilled: Boolean,
     isCurrent: Boolean,
-    isError: Boolean,
-    onClick: () -> Unit
+    isError: Boolean
 ) {
    val backgroundColor = White
 
@@ -160,7 +172,6 @@ private fun OtpDigitBox(
         else -> Color(0xFFB0BEC5)
     }
 
-
     val borderWidth = if (isCurrent || isFilled) 2.dp else 1.dp
 
     Box(
@@ -168,8 +179,7 @@ private fun OtpDigitBox(
             .size(45.dp)
             .clip(MaterialTheme.shapes.medium)
             .background(backgroundColor)
-            .border(borderWidth, DarkGray, MaterialTheme.shapes.medium)
-            .clickable(onClick = onClick),
+            .border(borderWidth, borderColor, MaterialTheme.shapes.medium),
         contentAlignment = Alignment.Center
     ) {
         Text(
