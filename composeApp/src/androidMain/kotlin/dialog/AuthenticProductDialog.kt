@@ -62,13 +62,53 @@ data class Gs1Field(
     val value: String     // actual value from "value" field
 )
 
-/** Top-level scan result mapped from the API response */
+/** Top-level scan result mapped from the SDK / API response */
 data class ScanResult(
     val barcodeData: String,
-    val gs1Fields: List<Gs1Field>,   // dynamic – ordered as received from JSON
+    val gs1Fields: List<Gs1Field>,
     val encryptedText: String,
-    val quality: String              // "Real" | "Fake" | …
+    val quality: String,
+    /** Exact string read from the barcode (scanResult.first). */
+    val rawBarcode: String = barcodeData,
+    /** Human-readable symbology, e.g. "QR Code", "Code 128". */
+    val barcodeType: String = "",
 )
+
+fun inferBarcodeTypeFromRaw(raw: String): String {
+    val trimmed = raw.trim()
+    if (trimmed.isEmpty()) return "Unknown"
+    return when {
+        trimmed.startsWith("http", ignoreCase = true) -> "QR Code"
+        trimmed.contains("]Q3", ignoreCase = true) -> "QR Code"
+        trimmed.contains("]d2", ignoreCase = true) -> "Data Matrix"
+        trimmed.contains("]C1", ignoreCase = true) -> "Code 128"
+        trimmed.contains('\u001D') -> "GS1-128"
+        trimmed.contains("(01)") -> "GS1-128"
+        trimmed.matches(Regex("""^\d{13}$""")) -> "EAN-13"
+        trimmed.matches(Regex("""^\d{8}$""")) -> "EAN-8"
+        trimmed.matches(Regex("""^\d{12}$""")) -> "UPC-A"
+        else -> "Barcode"
+    }
+}
+
+private fun extractBarcodeTypeFromJson(first: JSONObject): String {
+    return first.optString("barcode_type")
+        .ifBlank { first.optString("type") }
+        .ifBlank { first.optString("symbology") }
+        .ifBlank { first.optString("format") }
+}
+
+private fun ScanResult.enriched(raw: String, first: JSONObject? = null): ScanResult {
+    val rawValue = raw.ifBlank { rawBarcode }.ifBlank { barcodeData }
+    val type = barcodeType.ifBlank {
+        first?.let { extractBarcodeTypeFromJson(it) }.orEmpty()
+    }.ifBlank { inferBarcodeTypeFromRaw(rawValue) }
+    return copy(
+        rawBarcode = rawValue,
+        barcodeData = barcodeData.ifBlank { rawValue },
+        barcodeType = type,
+    )
+}
 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -104,70 +144,151 @@ data class ScanResult(
  * used as the `barcode_data` for the flat-list shape (which doesn't carry
  * one of its own). No fields are derived from it.
  */
-fun parseScanResponse(jsonString: String, rawData: String? = null): ScanResult? {
+private fun normalizeSdkJsonPayload(jsonString: String, rawData: String?): JSONArray? {
+    val trimmed = jsonString.trim()
+    if (trimmed.isEmpty() || trimmed == "null") return null
     return try {
-        val array = JSONArray(jsonString)
-        if (array.length() == 0) return null
+        when {
+            trimmed.startsWith("[") -> JSONArray(trimmed)
+            trimmed.startsWith("{") -> JSONArray().put(JSONObject(trimmed))
+            else -> null
+        }
+    } catch (_: Exception) {
+        null
+    }
+}
 
-        val first = array.getJSONObject(0)
+private fun parseGs1FieldsFromObject(gs1Object: JSONObject): List<Gs1Field> {
+    val gs1Fields = mutableListOf<Gs1Field>()
+    val keys = gs1Object.keys()
+    while (keys.hasNext()) {
+        val ai = keys.next()
+        val fieldObj = gs1Object.optJSONObject(ai) ?: continue
+        gs1Fields.add(
+            Gs1Field(
+                ai = ai,
+                name = fieldObj.optString("name")
+                    .ifBlank { fieldObj.optString("description", ai) },
+                value = fieldObj.optString("value", "—"),
+            )
+        )
+    }
+    return gs1Fields
+}
+
+private fun parseFlatAiArray(array: JSONArray): List<Gs1Field> {
+    val gs1Fields = mutableListOf<Gs1Field>()
+    for (i in 0 until array.length()) {
+        val item = array.optJSONObject(i) ?: continue
+        if (!item.has("ai") || !item.has("value")) continue
+        val ai = item.optString("ai")
+        if (ai.isBlank()) continue
+        gs1Fields.add(
+            Gs1Field(
+                ai = ai,
+                name = item.optString("description")
+                    .ifBlank { item.optString("name", ai) },
+                value = item.optString("value", "—"),
+            )
+        )
+    }
+    return gs1Fields
+}
+
+/** GS1 path segments from a digital link, e.g. `/01/gtin/10/batch/21/serial`. */
+private fun parseGs1FieldsFromDigitalLink(raw: String): List<Gs1Field> {
+    if (raw.isBlank()) return emptyList()
+    val fields = mutableListOf<Gs1Field>()
+    Regex("""/01/([^/?#]+)""").find(raw)?.groupValues?.getOrNull(1)?.let {
+        fields.add(Gs1Field("01", "GTIN", it))
+    }
+    Regex("""/10/([^/?#]+)""").find(raw)?.groupValues?.getOrNull(1)?.let {
+        fields.add(Gs1Field("10", "Batch/Lot Number", it))
+    }
+    Regex("""/21/([^/?#]+)""").find(raw)?.groupValues?.getOrNull(1)?.let {
+        fields.add(Gs1Field("21", "Serial Number", it))
+    }
+    Regex("""\(01\)([^()]+)""").find(raw)?.groupValues?.getOrNull(1)?.trim()?.let {
+        if (fields.none { f -> f.ai == "01" }) fields.add(Gs1Field("01", "GTIN", it))
+    }
+    Regex("""\(10\)([^()]+)""").find(raw)?.groupValues?.getOrNull(1)?.trim()?.let {
+        if (fields.none { f -> f.ai == "10" }) fields.add(Gs1Field("10", "Batch/Lot Number", it))
+    }
+    Regex("""\(21\)([^()]+)""").find(raw)?.groupValues?.getOrNull(1)?.trim()?.let {
+        if (fields.none { f -> f.ai == "21" }) fields.add(Gs1Field("21", "Serial Number", it))
+    }
+    return fields
+}
+
+fun parseScanResponse(jsonString: String, rawData: String? = null): ScanResult? {
+    val raw = rawData?.trim().orEmpty()
+    return try {
+        val array = normalizeSdkJsonPayload(jsonString, raw) ?: return fallbackScanResult(raw)
+
+        if (array.length() == 0) return fallbackScanResult(raw)
+
+        val first = array.optJSONObject(0) ?: return fallbackScanResult(raw)
         val isFlatAiList = first.has("ai") && first.has("value")
 
         if (isFlatAiList) {
-            val gs1Fields = mutableListOf<Gs1Field>()
-            for (i in 0 until array.length()) {
-                val item = array.optJSONObject(i) ?: continue
-                val ai = item.optString("ai").ifBlank { continue }
-                gs1Fields.add(
-                    Gs1Field(
-                        ai = ai,
-                        name = item.optString("description")
-                            .ifBlank { item.optString("name", ai) },
-                        value = item.optString("value", "—")
-                    )
-                )
+            var gs1Fields = parseFlatAiArray(array)
+            val barcodeData = raw.ifBlank {
+                first.optString("barcode_data")
+                    .ifBlank { first.optString("data") }
             }
-
+            if (gs1Fields.isEmpty()) {
+                gs1Fields = parseGs1FieldsFromDigitalLink(barcodeData)
+            }
             return ScanResult(
-                barcodeData = rawData.orEmpty(),
+                barcodeData = barcodeData,
                 gs1Fields = gs1Fields,
                 encryptedText = "",
-                quality = ""
-            )
+                quality = "",
+                rawBarcode = raw.ifBlank { barcodeData },
+            ).enriched(raw, first)
         }
 
-        // ── Legacy nested shape ─────────────────────────────────────────────
-        val obj: JSONObject = first
+        // Legacy / auth API: { barcode_data, gs1_data, encrypted_text, quality }
+        val barcodeData = first.optString("barcode_data", "")
+            .ifBlank { raw }
+        val encryptedText = first.optString("encrypted_text", "")
+        val quality = first.optString("quality", "")
+        val barcodeType = extractBarcodeTypeFromJson(first)
 
-        val barcodeData   = obj.optString("barcode_data", "")
-        val encryptedText = obj.optString("encrypted_text", "")
-        val quality       = obj.optString("quality", "")
-
-        val gs1Object: JSONObject = obj.optJSONObject("gs1_data") ?: JSONObject()
-        val gs1Fields = mutableListOf<Gs1Field>()
-
-        val keys = gs1Object.keys()
-        while (keys.hasNext()) {
-            val ai = keys.next()
-            val fieldObj: JSONObject = gs1Object.optJSONObject(ai) ?: continue
-            gs1Fields.add(
-                Gs1Field(
-                    ai    = ai,
-                    name  = fieldObj.optString("name", ai),
-                    value = fieldObj.optString("value", "—")
-                )
-            )
-        }
-
-        ScanResult(
-            barcodeData   = barcodeData,
-            gs1Fields     = gs1Fields,
-            encryptedText = encryptedText,
-            quality       = quality
+        var gs1Fields = parseGs1FieldsFromObject(
+            first.optJSONObject("gs1_data") ?: JSONObject()
         )
+        if (gs1Fields.isEmpty()) {
+            gs1Fields = parseFlatAiArray(array)
+        }
+        if (gs1Fields.isEmpty()) {
+            gs1Fields = parseGs1FieldsFromDigitalLink(barcodeData.ifBlank { raw })
+        }
+
+        return ScanResult(
+            barcodeData = barcodeData.ifBlank { raw },
+            gs1Fields = gs1Fields,
+            encryptedText = encryptedText,
+            quality = quality,
+            rawBarcode = raw.ifBlank { barcodeData },
+            barcodeType = barcodeType,
+        ).enriched(raw, first)
     } catch (e: Exception) {
         e.printStackTrace()
-        null
+        fallbackScanResult(raw)
     }
+}
+
+private fun fallbackScanResult(raw: String): ScanResult? {
+    if (raw.isBlank()) return null
+    val gs1Fields = parseGs1FieldsFromDigitalLink(raw)
+    return ScanResult(
+        barcodeData = raw,
+        gs1Fields = gs1Fields,
+        encryptedText = "",
+        quality = "",
+        rawBarcode = raw,
+    ).enriched(raw)
 }
 
 
@@ -189,6 +310,12 @@ private val ChipBlueBg    = Color(0xFFE3F2FD)
 private val DividerColor  = Color(0xFFEEEEEE)
 private val CardBg        = Color(0xFFF7F8FA)
 
+/** Digital Link block is shown only for Ratifye resolver URLs. */
+private fun findRatifyeDigitalLink(vararg candidates: String): String? =
+    candidates.firstOrNull { url ->
+        url.trim().contains("dl.ratifye.ai", ignoreCase = true)
+    }?.trim()?.takeIf { it.isNotEmpty() }
+
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 4.  DIALOG
@@ -202,13 +329,46 @@ fun AuthenticProductDialog(
     onContinue: () -> Unit = {},
     onLinkClick: (String) -> Unit = {}
 ) {
-    val isReal        = result.quality.equals("Real", ignoreCase = true)
-    val headerColor   = if (isReal) GreenPrimary else RedPrimary
-    val headerBg      = if (isReal) GreenLight   else RedLight
-    val badgeDotColor = if (isReal) GreenBadge   else RedPrimary
-    val badgeLabel    = if (isReal) "Verified"   else "Not Verified"
-    val titleText     = if (isReal) "Authentic Product"    else "Counterfeit Detected"
-    val subtitleText  = if (isReal) "Verified as genuine." else "This product may be fake."
+    val hasQuality = result.quality.isNotBlank()
+    val isReal = result.quality.equals("Real", ignoreCase = true)
+    val isFake = result.quality.equals("Fake", ignoreCase = true)
+
+    val headerColor = when {
+        !hasQuality -> BluePrimary
+        isReal -> GreenPrimary
+        else -> RedPrimary
+    }
+    val headerBg = when {
+        !hasQuality -> BlueLinkBg
+        isReal -> GreenLight
+        else -> RedLight
+    }
+    val badgeDotColor = when {
+        !hasQuality -> BluePrimary
+        isReal -> GreenBadge
+        else -> RedPrimary
+    }
+    val badgeLabel = when {
+        !hasQuality -> "Scanned"
+        isReal -> "Verified"
+        isFake -> "Not Verified"
+        else -> result.quality
+    }
+    val titleText = when {
+        !hasQuality -> "Scan Result"
+        isReal -> "Authentic Product"
+        isFake -> "Counterfeit Detected"
+        else -> "Verification Result"
+    }
+    val subtitleText = when {
+        !hasQuality -> "Parsed barcode data from scan."
+        isReal -> "Verified as genuine."
+        isFake -> "This product may be fake."
+        else -> result.quality
+    }
+
+    val rawDataText = raw.ifBlank { result.rawBarcode }.ifBlank { result.barcodeData }
+    val ratifyeLink = findRatifyeDigitalLink(raw, result.barcodeData, result.rawBarcode)
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -265,8 +425,10 @@ fun AuthenticProductDialog(
                                 contentAlignment = Alignment.Center
                             ) {
                                 Icon(
-                                    imageVector     = if (isReal) Icons.Filled.CheckCircle
-                                    else Icons.Filled.Warning,
+                                    imageVector = when {
+                                        !hasQuality || isReal -> Icons.Filled.CheckCircle
+                                        else -> Icons.Filled.Warning
+                                    },
                                     contentDescription = badgeLabel,
                                     tint            = headerColor,
                                     modifier        = Modifier.size(30.dp)
@@ -323,74 +485,77 @@ fun AuthenticProductDialog(
                             modifier = Modifier.padding(vertical = 18.dp)
                         )
 
-                        // ── Product Information ───────────────────────────────
-                        Text(
-                            text       = "PRODUCT INFORMATION",
-                            fontSize   = 14.sp,
-                            fontWeight = FontWeight.Medium,
-                            letterSpacing = 1.sp,
-                            color      = LabelGray,
-                            modifier   = Modifier.padding(bottom = 12.dp)
+                        ScanDetailsSection(
+                            rawData = rawDataText,
+                            barcodeType = result.barcodeType,
                         )
 
-                        // Dynamic 2-column grid built from whatever gs1Fields arrives
-                        DynamicGs1Grid(fields = result.gs1Fields)
+                        if (result.gs1Fields.isNotEmpty()) {
+                            HorizontalDivider(
+                                color = DividerColor,
+                                modifier = Modifier.padding(vertical = 18.dp),
+                            )
+                            Text(
+                                text = "PARSED GS1 VALUES",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium,
+                                letterSpacing = 1.sp,
+                                color = LabelGray,
+                                modifier = Modifier.padding(bottom = 12.dp),
+                            )
+                            DynamicGs1Grid(fields = result.gs1Fields)
+                        }
 
-                        HorizontalDivider(
-                            color    = DividerColor,
-                            modifier = Modifier.padding(vertical = 18.dp)
-                        )
-
-                        // ── Digital Link ─────────────────────────────────────
-                        Text(
-                            text       = "DIGITAL LINK",
-                            fontSize   = 14.sp,
-                            fontWeight = FontWeight.Medium,
-                            letterSpacing = 1.sp,
-                            color      = LabelGray,
-                            modifier   = Modifier.padding(bottom = 10.dp)
-                        )
-
-                        Surface(
-                            shape    = RoundedCornerShape(12.dp),
-                            color    = BlueLinkBg,
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clickable {
-                                    if (raw.contains("http")) {
-                                        onLinkClick(result.barcodeData)
-                                    }
-                                }
-                        ) {
-                            Row(
-                                verticalAlignment = Alignment.CenterVertically,
-                                modifier = Modifier.padding(14.dp)
+                        if (ratifyeLink != null) {
+                            HorizontalDivider(
+                                color = DividerColor,
+                                modifier = Modifier.padding(vertical = 18.dp),
+                            )
+                            Text(
+                                text = "DIGITAL LINK",
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.Medium,
+                                letterSpacing = 1.sp,
+                                color = LabelGray,
+                                modifier = Modifier.padding(bottom = 10.dp),
+                            )
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = BlueLinkBg,
+                                modifier = Modifier
+                                    .fillMaxWidth()
+                                    .clickable { onLinkClick(ratifyeLink) },
                             ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(32.dp)
-                                        .clip(CircleShape)
-                                        .background(BlueLinkText.copy(alpha = 0.12f)),
-                                    contentAlignment = Alignment.Center
+                                Row(
+                                    verticalAlignment = Alignment.CenterVertically,
+                                    modifier = Modifier.padding(14.dp),
                                 ) {
-                                    Text(text = "🔗", fontSize = 14.sp)
+                                    Box(
+                                        modifier = Modifier
+                                            .size(32.dp)
+                                            .clip(CircleShape)
+                                            .background(BlueLinkText.copy(alpha = 0.12f)),
+                                        contentAlignment = Alignment.Center,
+                                    ) {
+                                        Text(text = "🔗", fontSize = 14.sp)
+                                    }
+                                    Spacer(modifier = Modifier.width(10.dp))
+                                    Text(
+                                        text = ratifyeLink,
+                                        color = BlueLinkText,
+                                        fontSize = 13.sp,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f),
+                                    )
+                                    Spacer(modifier = Modifier.width(6.dp))
+                                    Icon(
+                                        imageVector = Icons.Filled.OpenInNew,
+                                        contentDescription = "Open link",
+                                        tint = BlueLinkText,
+                                        modifier = Modifier.size(18.dp),
+                                    )
                                 }
-                                Spacer(modifier = Modifier.width(10.dp))
-                                Text(
-                                    text     = if (raw.contains("http")) raw else result.barcodeData,
-                                    color    = BlueLinkText,
-                                    fontSize = 13.sp,
-                                    maxLines = 2,
-                                    overflow = TextOverflow.Ellipsis,
-                                    modifier = Modifier.weight(1f)
-                                )
-                                Spacer(modifier = Modifier.width(6.dp))
-                                Icon(
-                                    imageVector        = Icons.Filled.OpenInNew,
-                                    contentDescription = "Open link",
-                                    tint               = BlueLinkText,
-                                    modifier           = Modifier.size(18.dp)
-                                )
                             }
                         }
 
@@ -404,7 +569,11 @@ fun AuthenticProductDialog(
                                 .height(54.dp),
                             shape  = RoundedCornerShape(16.dp),
                             colors = ButtonDefaults.buttonColors(
-                                containerColor = if (isReal) BluePrimary else RedPrimary
+                                containerColor = when {
+                                    !hasQuality -> BluePrimary
+                                    isReal -> BluePrimary
+                                    else -> RedPrimary
+                                }
                             )
                         ) {
                             Text(
@@ -423,6 +592,72 @@ fun AuthenticProductDialog(
     }
 }
 
+
+@Composable
+private fun ScanDetailsSection(
+    rawData: String,
+    barcodeType: String,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(bottom = 12.dp),
+        horizontalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Text(
+            text = "SCAN DATA",
+            fontSize = 14.sp,
+            fontWeight = FontWeight.Medium,
+            letterSpacing = 1.sp,
+            color = LabelGray,
+        )
+        Surface(
+            shape = RoundedCornerShape(8.dp),
+            color = ChipBlueBg,
+        ) {
+            Text(
+                text = barcodeType.ifBlank { "Unknown" },
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                color = ChipBlue,
+                modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
+            )
+        }
+    }
+
+    Surface(
+        shape = RoundedCornerShape(12.dp),
+        color = CardBg,
+        modifier = Modifier.fillMaxWidth(),
+    ) {
+        Column(
+            modifier = Modifier.padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp),
+        ) {
+            Text(
+                text = "Raw data",
+                fontSize = 12.sp,
+                color = LabelGray,
+            )
+            Surface(
+                shape = RoundedCornerShape(10.dp),
+                color = Color.White,
+                modifier = Modifier.fillMaxWidth(),
+            ) {
+                Text(
+                    text = rawData.ifBlank { "—" },
+                    fontSize = 13.sp,
+                    fontWeight = FontWeight.Medium,
+                    color = Color(0xFF1A1A1A),
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(12.dp),
+                )
+            }
+        }
+    }
+}
 
 // ─────────────────────────────────────────────────────────────────────────────
 // 5.  DYNAMIC GRID  –  pairs fields into rows of 2

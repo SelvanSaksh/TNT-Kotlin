@@ -27,8 +27,9 @@ import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil3.compose.AsyncImage
-import core.network.models.GenerationLogRequest
+import core.location.AppLocationCache
 import core.network.repository.AppRepository
+import core.util.AuditLogHelper
 import io.ktor.client.*
 import io.ktor.client.call.*
 import io.ktor.client.plugins.contentnegotiation.*
@@ -145,70 +146,19 @@ fun CommonBarcodeScreen(
                 BillingRepository.incrementUsage(sessionManager, "barcode_generation", 1)
                     .onFailure { println("⚠️ subscription usage: ${it.message}") }
 
-                // ✅ 2. Get Location
-                var lat = 0.0
-                var lon = 0.0
-                var city: String? = null
-                var state: String? = null
+                AppLocationCache.ensureFresh(locationProvider)
+                AppLocationCache.persistTo(sessionManager)
 
-                var locationPair: Pair<Double, Double>? = null
-
-                repeat(3) {
-                    locationPair = locationProvider.getCurrentLocation()
-                    println("📍 Attempt ${it + 1}: $locationPair")
-
-                    if (locationPair != null) return@repeat
-                    kotlinx.coroutines.delay(1000)
-                }
-
-                println("location: $locationPair")
-                if (locationPair != null) {
-                    lat = locationPair.first
-                    lon = locationPair.second
-
-                    println("generate: $lat, $lon")
-                    val locationResult = AppRepository.getLocationDetails(lat, lon)
-
-                    locationResult.onSuccess { locationData ->
-
-                        city  = locationData.city ?: "Unknown"
-                        state = locationData.state ?: "Unknown"
-                        print("📍 LOCATION FETCH SUCCESS: $locationData")
-                        println("🏙️ CITY: $city")
-                        println("🌍 STATE: $state")
-
-                    }.onFailure {
-                        println("❌ LOCATION FETCH FAILED: ${it.message}")
-
-                        // fallback (important)
-                        city = "Unknown"
-                        state = "Unknown"
-                    }
-                }
-
-                val companyId = sessionManager.getCompanyId()?.toIntOrNull()
-                if (companyId == null) {
-                    println("❌ COMPANY ID MISSING")
-                    return@launch
-                }
-
-
-                val generationRequest = GenerationLogRequest(
-                    barcode_type = barcodeType.displayName,
-                    barcode_data = input,
-                    company_id = companyId,
-                    lat = lat,
-                    long = lon,
-                    event_id = core.util.newGenerationEventId(),
-                    serial = core.util.extractGs1Serial(input),
-                    batch = core.util.extractGs1Batch(input),
-                    device_type = "android"
+                val generationRequest = AuditLogHelper.buildGenerationLogRequest(
+                    sessionManager = sessionManager,
+                    barcodeType = barcodeType.displayName,
+                    barcodeData = input,
                 )
 
                 println("🚀 AUDIT REQUEST:")
                 println("barcode: ${input}")
                 println("type: ${barcodeType.displayName}")
-                println("lat: $lat, lon: $lon")
+                println("lat: ${generationRequest.lat}, lon: ${generationRequest.long}, geo: ${generationRequest.geo_location}")
 
                 // ✅ 4. Send Audit Log
                 val result = AppRepository.sendGenerationLog(generationRequest)

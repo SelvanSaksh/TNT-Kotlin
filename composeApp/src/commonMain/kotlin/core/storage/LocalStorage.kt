@@ -1,8 +1,10 @@
 package core.storage
 
+import network.clearAuthToken
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
+import core.session.WarehouseStaffRole
 
 expect class LocalStorage {
     fun saveString(key: String, value: String)
@@ -21,6 +23,13 @@ object StorageKeys {
     const val SUBSCRIPTION_STATUS = "subscription_status"
     const val SUBSCRIPTION_PLAN_ID = "subscription_plan_id"
     const val LOCATION_DETAILS = "location_details"
+    const val CACHED_LAT = "cached_lat"
+    const val CACHED_LON = "cached_lon"
+    const val CACHED_GEO_LABEL = "cached_geo_label"
+    const val GUEST_SCANNER_ID = "guest_scanner_id"
+    const val USER_ROLE = "user_role"
+    const val USER_MOBILE_MODULES = "user_mobile_modules"
+    const val ACTIVE_WAREHOUSE_STAFF_ROLE = "active_warehouse_staff_role"
 }
 
 class SessionManager(private val storage: LocalStorage) {
@@ -90,6 +99,50 @@ class SessionManager(private val storage: LocalStorage) {
 
     fun getLocationDetails(): String? = storage.getString(StorageKeys.LOCATION_DETAILS)
 
+    fun saveCachedDeviceLocation(lat: Double, lon: Double, geoLabel: String) {
+        storage.saveString(StorageKeys.CACHED_LAT, lat.toString())
+        storage.saveString(StorageKeys.CACHED_LON, lon.toString())
+        storage.saveString(StorageKeys.CACHED_GEO_LABEL, geoLabel)
+    }
+
+    fun getCachedLatitude(): Double? = storage.getString(StorageKeys.CACHED_LAT)?.toDoubleOrNull()
+
+    fun getCachedLongitude(): Double? = storage.getString(StorageKeys.CACHED_LON)?.toDoubleOrNull()
+
+    fun getCachedGeoLabel(): String? = storage.getString(StorageKeys.CACHED_GEO_LABEL)
+
+    fun getGuestScannerId(): String? = storage.getString(StorageKeys.GUEST_SCANNER_ID)
+
+    fun saveGuestScannerId(id: String) {
+        storage.saveString(StorageKeys.GUEST_SCANNER_ID, id)
+    }
+
+    fun saveUserRole(role: Int) {
+        storage.saveString(StorageKeys.USER_ROLE, role.toString())
+    }
+
+    fun getUserRole(): Int = storage.getString(StorageKeys.USER_ROLE)?.toIntOrNull() ?: 0
+
+    fun saveMobileWarehouseModules(modules: List<String>) {
+        storage.saveString(StorageKeys.USER_MOBILE_MODULES, json.encodeToString(modules))
+    }
+
+    fun getMobileWarehouseModules(): List<String> {
+        val raw = storage.getString(StorageKeys.USER_MOBILE_MODULES) ?: return emptyList()
+        return runCatching { json.decodeFromString<List<String>>(raw) }.getOrElse { emptyList() }
+    }
+
+    fun saveActiveWarehouseStaffRole(rawValue: String) {
+        storage.saveString(StorageKeys.ACTIVE_WAREHOUSE_STAFF_ROLE, rawValue)
+    }
+
+    fun getActiveWarehouseStaffRole(): WarehouseStaffRole? =
+        WarehouseStaffRole.fromRaw(storage.getString(StorageKeys.ACTIVE_WAREHOUSE_STAFF_ROLE))
+
+    fun clearActiveWarehouseStaffRole() {
+        storage.remove(StorageKeys.ACTIVE_WAREHOUSE_STAFF_ROLE)
+    }
+
     /** True only after OTP verification stored a token and user profile (not mid-login). */
     fun isLoggedIn(): Boolean {
         val token = getAccessToken()?.trim().orEmpty()
@@ -100,5 +153,14 @@ class SessionManager(private val storage: LocalStorage) {
     fun clearSession() {
         // User requested local storage to be cleared on logout.
         storage.clear()
+        clearAuthToken()
     }
+
+    /** Guest / explore mode — no completed sign-in session. */
+    fun isGuestUser(): Boolean = !isLoggedIn()
+}
+
+/** Sign-in prompt shown once per cold start when entering guest shell. */
+object GuestPromptState {
+    var shownThisLaunch: Boolean = false
 }

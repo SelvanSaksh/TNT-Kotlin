@@ -34,13 +34,17 @@ import androidx.compose.material.icons.filled.Notifications
 import androidx.compose.material.icons.filled.QrCode
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.Settings
+import androidx.compose.material.icons.outlined.AccessTime
 import androidx.compose.material.icons.outlined.QrCodeScanner
-import androidx.compose.material3.AlertDialog
+import androidx.compose.material.icons.outlined.Route
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.Surface
@@ -62,6 +66,8 @@ import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import core.network.models.BarcodeLookupQuery
+import core.session.WarehouseAccess
 import core.storage.SessionManager
 import core.storage.getLocalStorage
 import kotlinx.coroutines.launch
@@ -75,8 +81,13 @@ import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.contentOrNull
-import network.ApiClient
+import features.app.warehouse.WarehouseHomeSection
+import features.app.warehouse.WarehouseRoute
+import features.app.warehouse.wms.PackingWmsEntry
+import features.app.warehouse.wms.PickingWmsEntry
+import features.app.warehouse.wms.ReceivingWmsRoot
 import navigation.appscreen.Screens
+import network.ApiClient
 import network.models.UserDetail
 import theme.White
 import utils.openUrl
@@ -117,16 +128,20 @@ data class HistoryItem(
     val fileName: String,
     val action: String,
     val timeAgo: String,
-    val isGeneration: Boolean
+    val isGeneration: Boolean,
+    val lookupQuery: BarcodeLookupQuery = BarcodeLookupQuery(),
 )
 
 @Composable
 fun Home(
     onNavigate: (Screens) -> Unit,
-    onHistoryClick: () -> Unit = {}
+    onHistoryClick: () -> Unit = {},
+    onTrackTrace: (BarcodeLookupQuery) -> Unit = {},
 ) {
 
     val sessionManager = remember { SessionManager(getLocalStorage()) }
+    val warehouseAccess = remember { WarehouseAccess(sessionManager) }
+    val warehouseModules = remember(warehouseAccess) { warehouseAccess.homeWarehouseModules() }
     val json = remember { Json { ignoreUnknownKeys = true } }
     val scope = rememberCoroutineScope()
 
@@ -234,7 +249,8 @@ fun Home(
                         fileName = log.barcodeLogDisplayTitle(),
                         action = log.barcodeLogDisplayAction(),
                         timeAgo = formatTimeAgo(log.optString("created_at", log.optString("event_time"))),
-                        isGeneration = isGeneration
+                        isGeneration = isGeneration,
+                        lookupQuery = log.barcodeLogLookupParams(),
                     )
                 }
 
@@ -288,6 +304,17 @@ fun Home(
                 verticalArrangement = Arrangement.spacedBy(16.dp)
             ) {
                 HeroBanner(onNavigate = onNavigate)
+                WarehouseHomeSection(
+                    modules = warehouseModules,
+                    onModuleClick = { route ->
+                        val screen = when (route) {
+                            WarehouseRoute.Picking -> Screens.PickingScreen
+                            WarehouseRoute.Packing -> Screens.PackingScreen
+                            WarehouseRoute.Receiving -> Screens.ReceivingScreen
+                        }
+                        onNavigate(screen)
+                    },
+                )
                 StatsRow(isLoading, totalScans, totalGenerations)
                 ActivityOverview(
                     isLoading = isLoading,
@@ -298,7 +325,8 @@ fun Home(
                 RecentHistory(
                     isLoading = isLoading,
                     items = recentItems,
-                    onSeeAllClick = onHistoryClick
+                    onSeeAllClick = onHistoryClick,
+                    onTrackTrace = onTrackTrace,
                 )
             }
         }
@@ -312,8 +340,9 @@ fun Home(
                 confirmButton = {
                     TextButton(onClick = {
                         sessionManager.clearSession()
+                        core.storage.GuestPromptState.shownThisLaunch = false
                         showLogoutDialog = false
-                        onNavigate(Screens.LoginScreen)
+                        onNavigate(Screens.GuestHomeScreen)
                     }) { Text("Logout", color = Color.Red) }
                 },
                 dismissButton = {
@@ -686,7 +715,8 @@ fun SkeletonChart() {
 fun RecentHistory(
     isLoading: Boolean,
     items: List<HistoryItem>,
-    onSeeAllClick: () -> Unit = {}
+    onSeeAllClick: () -> Unit = {},
+    onTrackTrace: (BarcodeLookupQuery) -> Unit = {},
 ) {
     Card(
         modifier = Modifier.fillMaxWidth(),
@@ -721,7 +751,7 @@ fun RecentHistory(
                 }
             } else {
                 items.forEach { item ->
-                    HistoryRow(item)
+                    HistoryRow(item, onTrackTrace)
                     HorizontalDivider(modifier = Modifier.padding(horizontal = 16.dp))
                 }
             }
@@ -730,7 +760,10 @@ fun RecentHistory(
 }
 
 @Composable
-fun HistoryRow(item: HistoryItem) {
+fun HistoryRow(
+    item: HistoryItem,
+    onTrackTrace: (BarcodeLookupQuery) -> Unit = {},
+) {
     Row(
         modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 14.dp),
         verticalAlignment = Alignment.CenterVertically,
@@ -761,11 +794,54 @@ fun HistoryRow(item: HistoryItem) {
                     openUrl(item.fileName.trim())
                 }
             )
-            Text("${item.action} • ${item.timeAgo}", fontSize = 12.sp, color = TextMuted)
+            Row(
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
+            ) {
+                Icon(
+                    imageVector = Icons.Outlined.AccessTime,
+                    contentDescription = null,
+                    tint = TextMuted,
+                    modifier = Modifier.size(12.dp),
+                )
+                Text(item.timeAgo, fontSize = 12.sp, color = TextMuted)
+            }
         }
 
-        Icon(Icons.Default.MoreVert, contentDescription = null,
-            tint = TextMuted, modifier = Modifier.size(18.dp))
+        var showMenu by remember { mutableStateOf(false) }
+        Box {
+            IconButton(
+                onClick = { showMenu = true },
+                modifier = Modifier.size(36.dp),
+            ) {
+                Icon(
+                    Icons.Default.MoreVert,
+                    contentDescription = "More",
+                    tint = TextMuted,
+                )
+            }
+            DropdownMenu(
+                expanded = showMenu,
+                onDismissRequest = { showMenu = false },
+            ) {
+                if (item.lookupQuery.canOpenTrackTrace()) {
+                    DropdownMenuItem(
+                        text = { Text("Track & Trace") },
+                        onClick = {
+                            showMenu = false
+                            onTrackTrace(item.lookupQuery)
+                        },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Outlined.Route,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        },
+                    )
+                }
+            }
+        }
     }
 }
 
@@ -796,9 +872,18 @@ fun formatTimeAgo(dateString: String): String {
 
     return when {
         diffSeconds < 60 -> "just now"
-        diffSeconds < 3600 -> "${diffSeconds / 60} mins ago"
-        diffSeconds < 86400 -> "${diffSeconds / 3600} hrs ago"
-        diffSeconds < 604800 -> "${diffSeconds / 86400} days ago"
+        diffSeconds < 3600 -> {
+            val mins = diffSeconds / 60
+            if (mins == 1L) "1 min ago" else "$mins mins ago"
+        }
+        diffSeconds < 86400 -> {
+            val hrs = diffSeconds / 3600
+            if (hrs == 1L) "1 hr ago" else "$hrs hrs ago"
+        }
+        diffSeconds < 604800 -> {
+            val days = diffSeconds / 86400
+            if (days == 1L) "1 day ago" else "$days days ago"
+        }
         else -> "recently"
     }
 }

@@ -16,37 +16,39 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import features.GuestSignInPromptDialog
 import navigation.AppScreen
 import navigation.appscreen.Screens
 import theme.White
 
 @Composable
 expect fun ScannerView(
-    scanMode: String,
+    verifyAuthenticity: Boolean,
+    isMultiScan: Boolean,
     onScanResult: (String) -> Unit,
     onNavigate: (String) -> Unit
 )
 
 @Composable
 fun Scans(
-    onNavigate: (String) -> Unit
+    onNavigate: (String) -> Unit,
+    isGuestMode: Boolean = false,
+    onSignInRequired: () -> Unit = {},
 ) {
-    var verifyAuthenticity by remember { mutableStateOf(true) }
+    var verifyAuthenticity by remember { mutableStateOf(!isGuestMode) }
     var isMultiScan by remember { mutableStateOf(false) }
-//    var showMoreSheet by remember { mutableStateOf(false) }
+    var showMoreSheet by remember { mutableStateOf(false) }
+    var showGuestAuthDialog by remember { mutableStateOf(false) }
 
     var currentScanMode by remember { mutableStateOf("VERIFY") }
-    var scannedResult by remember { mutableStateOf<String?>(null) }
-    var showResult by remember { mutableStateOf(false) }
 
     LaunchedEffect(verifyAuthenticity, isMultiScan) {
         currentScanMode = when {
+            isMultiScan && verifyAuthenticity -> "MULTI_AUTH"
             isMultiScan -> "MULTI"
             verifyAuthenticity -> "VERIFY"
             else -> "SINGLE"
         }
-        showResult = false
-        scannedResult = null
         println("SCANNERLOG: [Scans] mode resolved → $currentScanMode (verifyAuthenticity=$verifyAuthenticity, isMultiScan=$isMultiScan)")
     }
     
@@ -58,18 +60,12 @@ fun Scans(
             Box(
                 modifier = Modifier.weight(1f)
             ) {
-                key(currentScanMode) {
+                key(verifyAuthenticity, isMultiScan) {
                     ScannerView(
-                        scanMode = currentScanMode,
+                        verifyAuthenticity = verifyAuthenticity,
+                        isMultiScan = isMultiScan,
                         onScanResult = { result ->
-                            scannedResult = result
                             println("SCANNERLOG: [Scans] onScanResult mode=$currentScanMode resultLen=${result.length} preview='${result.take(120)}'")
-                            // When authenticity is enabled, Android scanner shows its own auth dialog/sheet.
-                            // Only show the raw popup when authenticity is disabled.
-                            if (!verifyAuthenticity && currentScanMode != "MULTI") {
-                                showResult = true
-                                println("SCANNERLOG: [Scans] showing raw result overlay (single scan, no auth)")
-                            }
                         },
                         onNavigate = onNavigate
                     )
@@ -119,105 +115,24 @@ fun Scans(
             onNavigate = onNavigate
         )*/
         
-        // Result overlay (shows on top of camera)
-        if (showResult && scannedResult != null) {
-            Box(
+        // Parsed scan popup is shown from ScannerView (Android) for guest and logged-in users
+        
+        // Scan options (single / multi / authenticity) — logged-in users only
+        if (!isGuestMode) {
+            IconButton(
+                onClick = { showMoreSheet = true },
                 modifier = Modifier
-                    .fillMaxSize()
-                    .background(Color.Black.copy(alpha = 0.7f)),
-                contentAlignment = Alignment.Center
+                    .align(Alignment.TopStart)
+                    .padding(start = 16.dp, top = 16.dp)
+                    .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
             ) {
-                Card(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(24.dp),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = White)
-                ) {
-                    Column(
-                        modifier = Modifier.padding(24.dp),
-                        horizontalAlignment = Alignment.CenterHorizontally
-                    ) {
-                        Icon(
-                            imageVector = Icons.Default.CheckCircle,
-                            contentDescription = null,
-                            tint = Color(0xFF4CAF50),
-                            modifier = Modifier.size(64.dp)
-                        )
-                        
-                        Spacer(Modifier.height(16.dp))
-                        
-                        Text(
-                            text = "Scan Successful!",
-                            fontSize = 20.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                        
-                        Spacer(Modifier.height(16.dp))
-                        
-                        Card(
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = CardDefaults.cardColors(
-                                containerColor = Color(0xFFF5F5F5)
-                            )
-                        ) {
-                            Text(
-                                text = scannedResult ?: "",
-                                fontSize = 14.sp,
-                                modifier = Modifier.padding(16.dp)
-                            )
-                        }
-                        
-                        Spacer(Modifier.height(24.dp))
-                        
-                        Button(
-                            onClick = {
-                                showResult = false
-                                scannedResult = null
-                            },
-                            modifier = Modifier.fillMaxWidth(),
-                            colors = ButtonDefaults.buttonColors(
-                                containerColor = Color.Black
-                            )
-                        ) {
-                            Text("Scan Again")
-                        }
-                    }
-                }
+                Icon(
+                    imageVector = Icons.Default.MoreVert,
+                    contentDescription = "More options",
+                    tint = White
+                )
             }
         }
-        
-        // Back button
-/*
-        IconButton(
-            onClick = { onNavigate(Screens.HomeScreen.destRoute) },
-            modifier = Modifier
-                .align(Alignment.TopStart)
-                .padding(16.dp)
-                .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
-        ) {
-            Icon(
-                imageVector = Icons.Default.ArrowBack,
-                contentDescription = "Back",
-                tint = White
-            )
-        }
-
-        // More options (like iOS bottom sheet)
-        IconButton(
-            onClick = { showMoreSheet = true },
-            modifier = Modifier
-                .align(Alignment.TopEnd)
-                .padding(16.dp)
-                .background(Color.Black.copy(alpha = 0.6f), RoundedCornerShape(12.dp))
-        ) {
-            Icon(
-                imageVector = Icons.Default.MoreVert,
-                contentDescription = "More options",
-                tint = White
-            )
-        }
-*/
 
 /*        Box(
             modifier = Modifier
@@ -234,8 +149,8 @@ fun Scans(
         }*/
     }
 
-/*    @OptIn(ExperimentalMaterial3Api::class)
-    if (showMoreSheet) {
+    @OptIn(ExperimentalMaterial3Api::class)
+    if (!isGuestMode && showMoreSheet) {
         ModalBottomSheet(
             onDismissRequest = { showMoreSheet = false },
             containerColor = Color.White
@@ -283,7 +198,10 @@ fun Scans(
                     verticalAlignment = Alignment.CenterVertically,
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Column(
+                        modifier = Modifier.weight(1f),
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
                         Text(
                             "Verify Authenticity",
                             fontSize = 14.sp,
@@ -291,22 +209,49 @@ fun Scans(
                             color = Color(0xFF111827)
                         )
                         Text(
-                            if (verifyAuthenticity) "Enabled — barcodes will be authenticated"
-                            else "Disabled — raw barcode data only",
+                            when {
+                                verifyAuthenticity && isMultiScan ->
+                                    "Enabled — multi scan with authentication"
+                                verifyAuthenticity ->
+                                    "Enabled — barcodes will be authenticated"
+                                isMultiScan ->
+                                    "Disabled — multi scan without authentication"
+                                else ->
+                                    "Disabled — raw barcode data only"
+                            },
                             fontSize = 12.sp,
                             color = Color(0xFF6B7280)
                         )
                     }
                     Switch(
                         checked = verifyAuthenticity,
-                        onCheckedChange = { verifyAuthenticity = it }
+                        onCheckedChange = { enabled ->
+                            if (isGuestMode && enabled) {
+                                showMoreSheet = false
+                                showGuestAuthDialog = true
+                            } else {
+                                verifyAuthenticity = enabled
+                            }
+                        },
+                        enabled = !isGuestMode
                     )
                 }
 
                 Spacer(Modifier.height(8.dp))
             }
         }
-    }*/
+    }
+
+    GuestSignInPromptDialog(
+        visible = showGuestAuthDialog,
+        onDismiss = { showGuestAuthDialog = false },
+        onSignIn = {
+            showGuestAuthDialog = false
+            onSignInRequired()
+        },
+        title = "Sign in for authentication",
+        message = "Product authentication, picking, and packing require an account. Sign in to verify barcodes, or continue scanning without authentication.",
+    )
 }
 
 @Composable

@@ -7,4 +7,7 @@ package network
  */
 object Config {
     const val BASE_URL = "https://api.tnt.sakksh.com"
+
+    /** Fallback company id for guest scan/generation audit when session has none. */
+    const val DEFAULT_COMPANY_ID = 4
 }

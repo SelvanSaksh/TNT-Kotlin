@@ -16,7 +16,7 @@ object HttpClientFactory {
                     prettyPrint = false
                     isLenient = true
                     explicitNulls = false
-                    encodeDefaults = false
+                    encodeDefaults = true
                 }
             )
         }
@@ -27,5 +27,6 @@ object HttpClientFactory {
         }
 
         install(AuthInterceptor)
+        install(UnauthorizedInterceptor)
     }
 }

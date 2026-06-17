@@ -14,6 +14,7 @@ import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Logout
 import androidx.compose.material.icons.outlined.Lock
 import androidx.compose.material.icons.outlined.Notifications
+import androidx.compose.material.icons.outlined.Sync
 import androidx.compose.material.icons.outlined.Translate
 import androidx.compose.material.icons.outlined.WorkspacePremium
 import androidx.compose.material3.*
@@ -27,6 +28,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import core.session.WarehouseAccess
 import core.storage.SessionManager
 import core.storage.getLocalStorage
 import kotlinx.serialization.json.Json
@@ -56,10 +58,14 @@ fun ProfileScreen(
     email: String? = "No email",
     role: Int? = 0,
     onNavigate: (AppScreen) -> Unit = {},
-    onNavigateToSubscription: () -> Unit = {},
-    onLogout: () -> Unit = {}
+    onLogout: () -> Unit = {},
+    onSwitchWarehouseRole: () -> Unit = {},
 ) {
     val sessionManager = remember { SessionManager(getLocalStorage()) }
+    val warehouseAccess = remember { WarehouseAccess(sessionManager) }
+    val isWarehouseStaffProfile = warehouseAccess.usesWarehouseStaffExperience
+    val activeStaffRole = warehouseAccess.resolvedWarehouseStaffRole()
+    val canSwitchWarehouseRole = warehouseAccess.availableWarehouseStaffRoles.size > 1
 
     val planInfo = remember {
         parseProfilePlan(
@@ -82,114 +88,124 @@ fun ProfileScreen(
         ) {
 
             // 🔷 HEADER
-            ProfileHeader(userName = userName, email = email, role = role)
-
-            // 🔷 CURRENT PLAN
-            PlanSection(
-                planInfo = planInfo,
-                onManagePlan = onNavigateToSubscription
+            ProfileHeader(
+                userName = userName,
+                email = email,
+                role = role,
+                roleLabel = profileRoleLabel(role, activeStaffRole?.displayName),
+                isWarehouseStaffProfile = isWarehouseStaffProfile,
+                onLogout = { showLogout = true },
             )
 
-            // 🔷 PREFERENCES
-            Column(
-                modifier = Modifier.padding(horizontal = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                SectionLabel("PREFERENCES")
+            if (isWarehouseStaffProfile) {
+                WarehouseStaffSettingsSection(
+                    canSwitchRole = canSwitchWarehouseRole,
+                    activeRoleName = activeStaffRole?.displayName,
+                    onSwitchRole = onSwitchWarehouseRole,
+                    onLogout = { showLogout = true },
+                )
+            } else {
+                PlanSection(planInfo = planInfo)
 
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color.White),
-                    border = BorderStroke(1.dp, BorderMuted),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+                Column(
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
                 ) {
-                    Column {
-                        SettingsRow(
-                            icon = Icons.Outlined.Notifications,
-                            title = "Notifications",
-                            subtitle = "Scan and plan alerts",
-                            trailing = {
-                                Switch(
-                                    checked = notificationsEnabled,
-                                    onCheckedChange = { notificationsEnabled = it },
-                                    colors = SwitchDefaults.colors(
-                                        checkedThumbColor = Color.White,
-                                        checkedTrackColor = Brand,
-                                        uncheckedTrackColor = Color(0xFFE5E7EB)
-                                    )
-                                )
-                            }
-                        )
-                        RowDivider()
-                        SettingsRow(
-                            icon = Icons.Outlined.Lock,
-                            title = "Security & Privacy",
-                            subtitle = "Permissions and data",
-                            trailing = { ChevronEnd() }
-                        )
-                        RowDivider()
-                        SettingsRow(
-                            icon = Icons.Outlined.Translate,
-                            title = "Language",
-                            subtitle = "English (US)",
-                            trailing = { ChevronEnd() }
-                        )
-                    }
-                }
+                    SectionLabel("PREFERENCES")
 
-                Spacer(Modifier.height(8.dp))
-
-                // 🔴 Logout
-                Card(
-                    modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(16.dp),
-                    colors = CardDefaults.cardColors(containerColor = Color.White),
-                    border = BorderStroke(1.dp, BorderMuted),
-                    elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
-                ) {
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clickable { showLogout = true }
-                            .padding(horizontal = 16.dp, vertical = 14.dp),
-                        verticalAlignment = Alignment.CenterVertically
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color.White),
+                        border = BorderStroke(1.dp, BorderMuted),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
                     ) {
-                        Box(
-                            modifier = Modifier
-                                .size(36.dp)
-                                .background(DangerRed.copy(alpha = 0.1f), RoundedCornerShape(10.dp)),
-                            contentAlignment = Alignment.Center
-                        ) {
-                            Icon(
-                                imageVector = Icons.Filled.Logout,
-                                contentDescription = null,
-                                tint = DangerRed,
-                                modifier = Modifier.size(18.dp)
+                        Column {
+                            SettingsRow(
+                                icon = Icons.Outlined.Notifications,
+                                title = "Notifications",
+                                subtitle = "Scan and plan alerts",
+                                trailing = {
+                                    Switch(
+                                        checked = notificationsEnabled,
+                                        onCheckedChange = { notificationsEnabled = it },
+                                        colors = SwitchDefaults.colors(
+                                            checkedThumbColor = Color.White,
+                                            checkedTrackColor = Brand,
+                                            uncheckedTrackColor = Color(0xFFE5E7EB)
+                                        )
+                                    )
+                                }
+                            )
+                            RowDivider()
+                            SettingsRow(
+                                icon = Icons.Outlined.Lock,
+                                title = "Security & Privacy",
+                                subtitle = "Permissions and data",
+                                trailing = { ChevronEnd() }
+                            )
+                            RowDivider()
+                            SettingsRow(
+                                icon = Icons.Outlined.Translate,
+                                title = "Language",
+                                subtitle = "English (US)",
+                                trailing = { ChevronEnd() }
                             )
                         }
-                        Spacer(Modifier.width(12.dp))
-                        Text(
-                            "Sign Out",
-                            color = DangerRed,
-                            fontSize = 15.sp,
-                            fontWeight = FontWeight.SemiBold,
-                            modifier = Modifier.weight(1f)
-                        )
                     }
+
+                    Spacer(Modifier.height(8.dp))
+
+                    Card(
+                        modifier = Modifier.fillMaxWidth(),
+                        shape = RoundedCornerShape(16.dp),
+                        colors = CardDefaults.cardColors(containerColor = Color.White),
+                        border = BorderStroke(1.dp, BorderMuted),
+                        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .clickable { showLogout = true }
+                                .padding(horizontal = 16.dp, vertical = 14.dp),
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(36.dp)
+                                    .background(DangerRed.copy(alpha = 0.1f), RoundedCornerShape(10.dp)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Filled.Logout,
+                                    contentDescription = null,
+                                    tint = DangerRed,
+                                    modifier = Modifier.size(18.dp)
+                                )
+                            }
+                            Spacer(Modifier.width(12.dp))
+                            Text(
+                                "Sign Out",
+                                color = DangerRed,
+                                fontSize = 15.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                modifier = Modifier.weight(1f)
+                            )
+                        }
+                    }
+
+                    Spacer(Modifier.height(20.dp))
+
+                    Text(
+                        "Version 1.0.0 • Ratifye",
+                        fontSize = 12.sp,
+                        color = TextMuted,
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .padding(bottom = 16.dp),
+                        textAlign = TextAlign.Center
+                    )
                 }
-
-                Spacer(Modifier.height(20.dp))
-
-                Text(
-                    "Version 1.0.0 • Ratifye",
-                    fontSize = 12.sp,
-                    color = TextMuted,
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .padding(bottom = 16.dp),
-                    textAlign = TextAlign.Center
-                )
             }
         }
 
@@ -197,7 +213,15 @@ fun ProfileScreen(
             AlertDialog(
                 onDismissRequest = { showLogout = false },
                 title = { Text("Sign Out", fontWeight = FontWeight.Bold) },
-                text = { Text("Are you sure you want to sign out?") },
+                text = {
+                    Text(
+                        if (isWarehouseStaffProfile && activeStaffRole != null) {
+                            "You will be signed out of your ${activeStaffRole.displayName} session and returned to the login screen."
+                        } else {
+                            "Are you sure you want to sign out?"
+                        }
+                    )
+                },
                 confirmButton = {
                     TextButton(onClick = {
                         showLogout = false
@@ -220,15 +244,24 @@ fun ProfileScreen(
 // Header
 
 @Composable
-private fun ProfileHeader(userName: String?, email: String?, role: Int?) {
+private fun ProfileHeader(
+    userName: String?,
+    email: String?,
+    role: Int?,
+    roleLabel: String,
+    isWarehouseStaffProfile: Boolean,
+    onLogout: () -> Unit,
+) {
     Box(
         modifier = Modifier
             .fillMaxWidth()
             .background(Brush.linearGradient(listOf(Brand, BrandDark)))
-            .padding(top = 32.dp, bottom = 28.dp),
-        contentAlignment = Alignment.Center
+            .padding(top = if (isWarehouseStaffProfile) 52.dp else 32.dp, bottom = 28.dp),
     ) {
-        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+        Column(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalAlignment = Alignment.CenterHorizontally,
+        ) {
 
             Box(
                 modifier = Modifier
@@ -263,25 +296,110 @@ private fun ProfileHeader(userName: String?, email: String?, role: Int?) {
                 )
             }
 
-            if (role != null) {
-                Spacer(Modifier.height(10.dp))
-                Box(
-                    modifier = Modifier
-                        .background(Color.White.copy(alpha = 0.18f), RoundedCornerShape(999.dp))
-                        .border(1.dp, Color.White.copy(alpha = 0.3f), RoundedCornerShape(999.dp))
-                        .padding(horizontal = 12.dp, vertical = 4.dp)
-                ) {
-                    Text(
-                        roleLabel(role),
-                        color = Color.White,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.SemiBold,
-                        letterSpacing = 0.6.sp
-                    )
-                }
+            Spacer(Modifier.height(10.dp))
+            Box(
+                modifier = Modifier
+                    .background(Color.White.copy(alpha = 0.18f), RoundedCornerShape(999.dp))
+                    .border(1.dp, Color.White.copy(alpha = 0.3f), RoundedCornerShape(999.dp))
+                    .padding(horizontal = 12.dp, vertical = 4.dp)
+            ) {
+                Text(
+                    roleLabel,
+                    color = Color.White,
+                    fontSize = 11.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    letterSpacing = 0.6.sp
+                )
+            }
+        }
+
+        if (isWarehouseStaffProfile) {
+            IconButton(
+                onClick = onLogout,
+                modifier = Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 8.dp, end = 16.dp)
+                    .size(40.dp)
+                    .background(Color.White.copy(alpha = 0.18f), CircleShape),
+            ) {
+                Icon(
+                    imageVector = Icons.Filled.Logout,
+                    contentDescription = "Logout",
+                    tint = Color.White,
+                    modifier = Modifier.size(18.dp),
+                )
             }
         }
     }
+}
+
+@Composable
+private fun WarehouseStaffSettingsSection(
+    canSwitchRole: Boolean,
+    activeRoleName: String?,
+    onSwitchRole: () -> Unit,
+    onLogout: () -> Unit,
+) {
+    Column(
+        modifier = Modifier.padding(horizontal = 16.dp),
+        verticalArrangement = Arrangement.spacedBy(8.dp),
+    ) {
+        if (canSwitchRole) {
+            SectionLabel("WAREHOUSE")
+
+            Card(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(16.dp),
+                colors = CardDefaults.cardColors(containerColor = Color.White),
+                border = BorderStroke(1.dp, BorderMuted),
+                elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+            ) {
+                SettingsRow(
+                    icon = Icons.Outlined.Sync,
+                    title = "Switch role",
+                    subtitle = activeRoleName?.let { "Currently working as $it" },
+                    onClick = onSwitchRole,
+                    trailing = { ChevronEnd() },
+                )
+            }
+
+            Spacer(Modifier.height(8.dp))
+        }
+
+        SectionLabel("ACCOUNT")
+
+        Card(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            colors = CardDefaults.cardColors(containerColor = Color.White),
+            border = BorderStroke(1.dp, BorderMuted),
+            elevation = CardDefaults.cardElevation(defaultElevation = 0.dp),
+        ) {
+            SettingsRow(
+                icon = Icons.Filled.Logout,
+                title = "Logout",
+                subtitle = "Sign out and return to login",
+                onClick = onLogout,
+            )
+        }
+
+        Spacer(Modifier.height(20.dp))
+
+        Text(
+            "Version 1.0.0 • Ratifye",
+            fontSize = 12.sp,
+            color = TextMuted,
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(bottom = 16.dp),
+            textAlign = TextAlign.Center,
+        )
+    }
+}
+
+private fun profileRoleLabel(role: Int?, staffRoleName: String?): String {
+    if (!staffRoleName.isNullOrBlank()) return staffRoleName.uppercase()
+    return roleLabel(role ?: 0)
 }
 
 private fun roleLabel(role: Int): String = when (role) {
@@ -297,7 +415,6 @@ private fun roleLabel(role: Int): String = when (role) {
 @Composable
 private fun PlanSection(
     planInfo: ProfilePlanInfo,
-    onManagePlan: () -> Unit
 ) {
     Column(
         modifier = Modifier.padding(horizontal = 16.dp, vertical = 16.dp),
@@ -388,31 +505,6 @@ private fun PlanSection(
                         planInfo.features.forEach { feature ->
                             FeatureUsageRow(feature)
                         }
-                    }
-                }
-
-                Box(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .background(BrandLight)
-                        .padding(16.dp)
-                ) {
-                    Button(
-                        onClick = onManagePlan,
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(46.dp),
-                        shape = RoundedCornerShape(12.dp),
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Brand,
-                            contentColor = Color.White
-                        )
-                    ) {
-                        Text(
-                            text = if (planInfo.isActive) "Manage Plan" else "Choose a Plan",
-                            fontSize = 14.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
                     }
                 }
             }

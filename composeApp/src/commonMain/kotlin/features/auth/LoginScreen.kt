@@ -12,6 +12,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.SnackbarHost
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -36,7 +37,8 @@ import theme.White
 @Composable
 fun LoginScreen(
     modifier: Modifier = Modifier,
-    onNavigateToOtp: (String, network.models.SendOtpResponse) -> Unit = { _, _ -> }
+    onNavigateToOtp: (String, network.models.SendOtpResponse) -> Unit = { _, _ -> },
+    onContinueAsGuest: () -> Unit = {},
 ) {
     var userInput by remember { mutableStateOf("") }
     var showContent by remember { mutableStateOf(false) }
@@ -136,6 +138,15 @@ fun LoginScreen(
                     fontSize = 12.sp,
                     fontWeight = FontWeight.Medium
                 )
+
+                TextButton(onClick = onContinueAsGuest) {
+                    Text(
+                        text = "Continue as guest",
+                        color = Color(0xFF163C66),
+                        fontSize = 14.sp,
+                        fontWeight = FontWeight.SemiBold,
+                    )
+                }
             }
         }
         

@@ -3,12 +3,18 @@ import core.network.models.AuditLogRequest
 import core.network.models.AuditLogResponse
 import core.network.models.BarcodeResponse
 import core.network.models.FetchAi
+import core.network.models.BarcodeLookupQuery
+import core.network.models.BarcodeLookupResponse
 import core.network.models.GenerationLogRequest
 import core.network.models.LocationDatas
 import core.network.models.NominatimResponse
 import core.network.models.ScanLogCreateRequest
+import core.util.ScanAuditLog
+import io.ktor.client.call.body
+import io.ktor.client.request.get
+import io.ktor.client.request.headers
+import io.ktor.http.encodeURLParameter
 import network.ApiClient
-import io.ktor.http.*
 
 
 object AppRepository {
@@ -68,15 +74,22 @@ object AppRepository {
     }
 
     suspend fun sendScanCreateLog(
-        body: ScanLogCreateRequest
+        body: ScanLogCreateRequest,
     ): Result<Unit> {
+        ScanAuditLog.line(
+            "POST /companies/barcode/create event=${body.event_type} user=${body.user_id} company=${body.company_id}",
+        )
+        ScanAuditLog.line("body=${ScanAuditLog.formatRequestBody(body)}")
         return try {
-            ApiClient.post<ScanLogCreateRequest, AuditLogResponse>(
+            val response = ApiClient.post<ScanLogCreateRequest, AuditLogResponse>(
                 endpoint = "/companies/barcode/create",
-                payload = body
+                payload = body,
             )
+            ScanAuditLog.line("POST OK success=${response.success} msg=${response.message}")
             Result.success(Unit)
         } catch (e: Exception) {
+            ScanAuditLog.line("POST FAILED ${e::class.simpleName}: ${e.message}")
+            e.printStackTrace()
             Result.failure(e)
         }
     }
@@ -95,6 +108,42 @@ object AppRepository {
         }
     }
 
+    suspend fun lookupBarcodeLogs(query: BarcodeLookupQuery): Result<BarcodeLookupResponse> {
+        return try {
+            if (!query.canOpenTrackTrace()) {
+                return Result.failure(IllegalArgumentException("lookup query is empty"))
+            }
+            val qs = buildBarcodeLookupQueryString(query)
+            if (qs.isBlank()) {
+                return Result.failure(IllegalArgumentException("lookup query string is empty"))
+            }
+            val response = ApiClient.get<BarcodeLookupResponse>(
+                endpoint = "/companies/barcode/logs/lookup?$qs",
+            )
+            Result.success(response)
+        } catch (e: Exception) {
+            e.printStackTrace()
+            Result.failure(e)
+        }
+    }
+
+    private fun buildBarcodeLookupQueryString(query: BarcodeLookupQuery): String {
+        if (query.hasStructured()) {
+            val parts = mutableListOf<String>()
+            if (query.gtin.isNotBlank()) parts.add("gtin=" + query.gtin.encodeURLParameter())
+            if (query.batch.isNotBlank()) parts.add("batch=" + query.batch.encodeURLParameter())
+            if (query.serial.isNotBlank()) parts.add("serial=" + query.serial.encodeURLParameter())
+            return parts.joinToString("&")
+        }
+        val key = query.legacyKey.trim()
+        if (key.isBlank()) return ""
+        // Prefer `gtin=` for bare numeric GTIN (matches dedicated GTIN endpoint style).
+        if (key.matches(Regex("""^\d{8,14}$"""))) {
+            return "gtin=" + key.encodeURLParameter()
+        }
+        return "key=" + key.encodeURLParameter()
+    }
+
     suspend fun getLocationDetails(
         latitude: Double,
         longitude: Double
@@ -105,20 +154,25 @@ object AppRepository {
                         "?lat=$latitude" +
                         "&lon=$longitude" +
                         "&format=json"
-            val response = ApiClient.get<NominatimResponse>(
-                endpoint = fullUrl
-            )
+            val response = ApiClient.client.get(fullUrl) {
+                headers {
+                    append("User-Agent", "SakkshAsset/1.0 (android; contact@sakksh.com)")
+                    append("Accept", "application/json")
+                    append("Accept-Language", "en")
+                }
+            }.body<NominatimResponse>()
 
+            val display = response.display_name.trim()
             val cityValue = response.address.city
                 ?: response.address.town
                 ?: response.address.village
                 ?: response.address.county
-                ?: response.display_name.split(",").firstOrNull()
+                ?: display.split(",").firstOrNull()?.trim()
 
             val location = LocationDatas(
                 latitude = latitude,
                 longitude = longitude,
-                displayName = response.display_name,
+                displayName = display.ifBlank { "Unknown" },
                 city = cityValue,
                 state = response.address.state,
                 country = response.address.country

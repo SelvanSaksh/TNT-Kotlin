@@ -6,7 +6,9 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.*
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
-import androidx.compose.material.icons.outlined.*
+import androidx.compose.material.icons.outlined.AccessTime
+import androidx.compose.material.icons.outlined.History
+import androidx.compose.material.icons.outlined.Route
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.*
@@ -20,8 +22,10 @@ import kotlinx.serialization.json.*
 import kotlinx.serialization.json.contentOrNull
 import core.storage.SessionManager
 import core.storage.getLocalStorage
+import core.network.models.BarcodeLookupQuery
 import features.app.barcodeLogDisplayAction
 import features.app.barcodeLogDisplayTitle
+import features.app.barcodeLogLookupParams
 import kotlinx.datetime.Clock
 import kotlinx.datetime.Instant
 import kotlinx.datetime.TimeZone
@@ -44,14 +48,17 @@ data class HistoryItemUi(
     val fileName: String,
     val action: String,
     val timeAgo: String,
-    val isGeneration: Boolean
+    val isGeneration: Boolean,
+    val lookupQuery: BarcodeLookupQuery,
 )
 
 enum class HistoryTab { Scans, Generations }
 
 // ── History Screen ────────────────────────────────────────────────────────────
 @Composable
-fun History() {
+fun History(
+    onTrackTrace: (BarcodeLookupQuery) -> Unit = {},
+) {
     val sessionManager = remember { SessionManager(getLocalStorage()) }
     val json = remember { Json { ignoreUnknownKeys = true } }
     val userDetail = remember {
@@ -105,7 +112,8 @@ fun History() {
                         fileName     = log.barcodeLogDisplayTitle(),
                         action       = log.barcodeLogDisplayAction(),
                         timeAgo      = formatTimeAgo(log.optString("created_at", log.optString("event_time"))),
-                        isGeneration = isGeneration
+                        isGeneration = isGeneration,
+                        lookupQuery = log.barcodeLogLookupParams(),
                     )
                 }
             } catch (e: Exception) {
@@ -143,7 +151,7 @@ fun History() {
         when {
             isLoading -> HistorySkeletonList()
             filteredItems.isEmpty() -> HistoryEmptyState(selectedTab, searchText)
-            else -> HistoryList(filteredItems)
+            else -> HistoryList(filteredItems, onTrackTrace)
         }
     }
 }
@@ -271,7 +279,10 @@ fun HistorySearchBar(
 
 // ── List ──────────────────────────────────────────────────────────────────────
 @Composable
-fun HistoryList(items: List<HistoryItemUi>) {
+fun HistoryList(
+    items: List<HistoryItemUi>,
+    onTrackTrace: (BarcodeLookupQuery) -> Unit,
+) {
     Column(
         modifier = Modifier
             .fillMaxSize()
@@ -286,7 +297,7 @@ fun HistoryList(items: List<HistoryItemUi>) {
         ) {
             Column {
                 items.forEachIndexed { index, item ->
-                    HistoryRowItem(item)
+                    HistoryRowItem(item, onTrackTrace)
                     if (index < items.lastIndex) {
                         HorizontalDivider(
                             modifier  = Modifier.padding(start = 76.dp),
@@ -326,7 +337,10 @@ fun HistoryList(items: List<HistoryItemUi>) {
 
 // ── Row Item ──────────────────────────────────────────────────────────────────
 @Composable
-fun HistoryRowItem(item: HistoryItemUi) {
+fun HistoryRowItem(
+    item: HistoryItemUi,
+    onTrackTrace: (BarcodeLookupQuery) -> Unit,
+) {
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -369,65 +383,56 @@ fun HistoryRowItem(item: HistoryItemUi) {
             )
             Row(
                 verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                horizontalArrangement = Arrangement.spacedBy(4.dp),
             ) {
                 Icon(
-                    imageVector = if (item.action == "Imported")
-                        Icons.Default.Download else Icons.Default.CameraAlt,
+                    imageVector = Icons.Outlined.AccessTime,
                     contentDescription = null,
-                    tint     = TextMuted,
-                    modifier = Modifier.size(12.dp)
+                    tint = TextMuted,
+                    modifier = Modifier.size(12.dp),
                 )
                 Text(
-                    text     = "${item.action} ${item.timeAgo}",
+                    text = item.timeAgo,
                     fontSize = 12.sp,
-                    color    = TextMuted
+                    color = TextMuted,
                 )
             }
         }
 
-        // More menu
-        var showMenu by remember { mutableStateOf(false) }
-        Box {
-            IconButton(
-                onClick  = { showMenu = true },
-                modifier = Modifier.size(32.dp)
-            ) {
-                Icon(
-                    Icons.Default.MoreVert,
-                    contentDescription = "More",
-                    tint     = TextMuted,
-                    modifier = Modifier.size(18.dp)
-                )
-            }
-            DropdownMenu(
-                expanded        = showMenu,
-                onDismissRequest = { showMenu = false }
-            ) {
-                DropdownMenuItem(
-                    text    = { Text("Share") },
-                    onClick = { showMenu = false },
-                    leadingIcon = {
-                        Icon(Icons.Default.Share, contentDescription = null,
-                            modifier = Modifier.size(18.dp))
-                    }
-                )
-                DropdownMenuItem(
-                    text    = { Text("Rename") },
-                    onClick = { showMenu = false },
-                    leadingIcon = {
-                        Icon(Icons.Default.Edit, contentDescription = null,
-                            modifier = Modifier.size(18.dp))
-                    }
-                )
-                DropdownMenuItem(
-                    text    = { Text("Delete", color = Color.Red) },
-                    onClick = { showMenu = false },
-                    leadingIcon = {
-                        Icon(Icons.Default.Delete, contentDescription = null,
-                            tint = Color.Red, modifier = Modifier.size(18.dp))
-                    }
-                )
+        // More menu — Track & Trace only (when lookup key exists)
+        if (item.lookupQuery.canOpenTrackTrace()) {
+            var showMenu by remember { mutableStateOf(false) }
+            Box {
+                IconButton(
+                    onClick = { showMenu = true },
+                    modifier = Modifier.size(32.dp),
+                ) {
+                    Icon(
+                        Icons.Default.MoreVert,
+                        contentDescription = "More",
+                        tint = TextMuted,
+                        modifier = Modifier.size(18.dp),
+                    )
+                }
+                DropdownMenu(
+                    expanded = showMenu,
+                    onDismissRequest = { showMenu = false },
+                ) {
+                    DropdownMenuItem(
+                        text = { Text("Track & Trace") },
+                        onClick = {
+                            showMenu = false
+                            onTrackTrace(item.lookupQuery)
+                        },
+                        leadingIcon = {
+                            Icon(
+                                Icons.Outlined.Route,
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp),
+                            )
+                        },
+                    )
+                }
             }
         }
     }
@@ -546,9 +551,18 @@ private fun formatTimeAgo(dateString: String): String {
 
     return when {
         diffSeconds < 60 -> "just now"
-        diffSeconds < 3600 -> "${diffSeconds / 60} mins ago"
-        diffSeconds < 86400 -> "${diffSeconds / 3600} hrs ago"
-        diffSeconds < 604800 -> "${diffSeconds / 86400} days ago"
+        diffSeconds < 3600 -> {
+            val mins = diffSeconds / 60
+            if (mins == 1L) "1 min ago" else "$mins mins ago"
+        }
+        diffSeconds < 86400 -> {
+            val hrs = diffSeconds / 3600
+            if (hrs == 1L) "1 hr ago" else "$hrs hrs ago"
+        }
+        diffSeconds < 604800 -> {
+            val days = diffSeconds / 86400
+            if (days == 1L) "1 day ago" else "$days days ago"
+        }
         else -> instant.toLocalDateTime(TimeZone.currentSystemDefault()).date.toString()
     }
 }

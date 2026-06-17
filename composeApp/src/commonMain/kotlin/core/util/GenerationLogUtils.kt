@@ -36,6 +36,17 @@ fun extractGs1Serial(gs1: String): String = extractGs1AiValue(gs1, "21")
 /** Convenience accessor — GS1 AI 10 is "Batch / Lot Number". */
 fun extractGs1Batch(gs1: String): String = extractGs1AiValue(gs1, "10")
 
+/** Convenience accessor — GS1 AI 01 is "GTIN". Also parses `/01/<gtin>` digital links. */
+fun extractGs1Gtin(gs1: String): String {
+    val fromAi = extractGs1AiValue(gs1, "01")
+    if (fromAi.isNotBlank()) return fromAi
+    return Regex("""/01/([^/?#]+)""")
+        .find(gs1)
+        ?.groupValues
+        ?.getOrNull(1)
+        .orEmpty()
+}
+
 /**
  * Mints a unique-per-generation event id, e.g. `evt_android_1746780600000_4271`.
  * The shape mirrors the API example (`evt_custom_generation_0001`).

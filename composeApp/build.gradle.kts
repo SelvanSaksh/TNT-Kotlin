@@ -1,4 +1,5 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import java.util.Properties
 
 plugins {
     alias(libs.plugins.kotlinMultiplatform)
@@ -15,7 +16,7 @@ kotlin {
             jvmTarget.set(JvmTarget.JVM_11)
         }
     }
-
+    
     listOf(
         iosArm64(),
         iosSimulatorArm64()
@@ -41,12 +42,18 @@ kotlin {
             implementation(compose.preview)
             implementation(libs.androidx.activity.compose)
 
-            implementation("com.github.Gowthamgsv32:scanner-sdk:1.9.12")
+            implementation(libs.scanner.sdk)
             implementation("androidx.constraintlayout:constraintlayout:2.2.1")
             implementation("androidx.fragment:fragment-ktx:1.8.9")
             implementation("com.google.android.material:material:1.13.0")
             implementation("com.google.android.gms:play-services-location:21.0.1")
             implementation("com.razorpay:checkout:1.6.41")
+
+            implementation(libs.mlkit.barcode.scanning)
+            implementation(libs.androidx.camera.core)
+            implementation(libs.androidx.camera.camera2)
+            implementation(libs.androidx.camera.lifecycle)
+            implementation(libs.androidx.camera.view)
         }
 
         // ====================== iOS ======================
@@ -93,15 +100,29 @@ kotlin {
 }
 
 android {
-    namespace = "com.app.sakkshasset"
+    namespace = "com.ratifye.app"
     compileSdk = libs.versions.android.compileSdk.get().toInt()
 
     defaultConfig {
-        applicationId = "com.app.sakkshasset"
+        applicationId = "com.ratifye.app"
         minSdk = libs.versions.android.minSdk.get().toInt()
         targetSdk = libs.versions.android.targetSdk.get().toInt()
         versionCode = 1
         versionName = "1.0"
+    }
+
+    signingConfigs {
+        create("release") {
+            val keystorePropertiesFile = rootProject.file("keystore.properties")
+            if (keystorePropertiesFile.exists()) {
+                val keystoreProperties = Properties()
+                keystorePropertiesFile.inputStream().use { keystoreProperties.load(it) }
+                storeFile = rootProject.file(keystoreProperties.getProperty("storeFile"))
+                storePassword = keystoreProperties.getProperty("storePassword")
+                keyAlias = keystoreProperties.getProperty("keyAlias")
+                keyPassword = keystoreProperties.getProperty("keyPassword")
+            }
+        }
     }
 
     packaging {
@@ -114,6 +135,10 @@ android {
     buildTypes {
         getByName("release") {
             isMinifyEnabled = false
+            val keystorePropertiesFile = rootProject.file("keystore.properties")
+            if (keystorePropertiesFile.exists()) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
 

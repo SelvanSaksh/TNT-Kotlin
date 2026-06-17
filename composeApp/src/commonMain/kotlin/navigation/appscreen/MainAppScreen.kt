@@ -1,4 +1,4 @@
-package features.app
+package navigation.appscreen
 
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
@@ -40,9 +40,15 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import core.network.models.BarcodeLookupQuery
+import core.session.WarehouseAccess
+import core.storage.GuestPromptState
 import core.storage.SessionManager
 import core.storage.getLocalStorage
+import features.app.AnalyticsScreen
+import features.app.Home as HomeScreen
 import features.app.scans.Scans
+import features.app.warehouse.WarehouseStaffModuleRoot
 import kotlinx.serialization.json.Json
 import navigation.AppScreen
 import navigation.appscreen.Screens
@@ -60,11 +66,16 @@ data class BottomTab(
 @Composable
 fun MainAppScreen(
     initialTab: AppScreen = AppScreen.Home,
-    onNavigate: (Screens) -> Unit
+    onNavigate: (Screens) -> Unit,
+    onSwitchWarehouseRole: () -> Unit = {},
 ) {
     var activeTab by remember { mutableStateOf(initialTab) }
+    var trackTraceQuery by remember { mutableStateOf<BarcodeLookupQuery?>(null) }
 
     val sessionManager = remember { SessionManager(getLocalStorage()) }
+    val warehouseAccess = remember { WarehouseAccess(sessionManager) }
+    val isWarehouseStaff = warehouseAccess.usesWarehouseStaffExperience
+    val staffRole = warehouseAccess.resolvedWarehouseStaffRole()
     val json = remember { Json { ignoreUnknownKeys = true } }
 
     val userDetail = remember {
@@ -73,14 +84,20 @@ fun MainAppScreen(
         }
     }
 
-
     Scaffold(
         containerColor = Color.White,
         bottomBar = {
-            BottomNavBar(
-                activeTab = activeTab,
-                onTabSelected = { activeTab = it }
-            )
+            if (isWarehouseStaff) {
+                StaffBottomNavBar(
+                    activeTab = activeTab,
+                    onTabSelected = { activeTab = it },
+                )
+            } else {
+                BottomNavBar(
+                    activeTab = activeTab,
+                    onTabSelected = { activeTab = it },
+                )
+            }
         }
     ) { innerPadding ->
         Box(
@@ -89,38 +106,94 @@ fun MainAppScreen(
                 .padding(innerPadding)
         ) {
             when (activeTab) {
-                AppScreen.Home    -> Home(
-                    onNavigate = onNavigate,
-                    onHistoryClick = { activeTab = AppScreen.History }
+                AppScreen.Home -> {
+                    if (staffRole != null) {
+                        WarehouseStaffModuleRoot(
+                            role = staffRole,
+                            onLogout = {
+                                sessionManager.clearSession()
+                                GuestPromptState.shownThisLaunch = false
+                                onNavigate(Screens.GuestHomeScreen)
+                            },
+                        )
+                    } else {
+                        HomeScreen(
+                            onNavigate = onNavigate,
+                            onHistoryClick = { activeTab = AppScreen.History },
+                            onTrackTrace = { q: BarcodeLookupQuery -> trackTraceQuery = q },
+                        )
+                    }
+                }
+                AppScreen.History -> features.app.history.History(
+                    onTrackTrace = { q -> trackTraceQuery = q },
                 )
-                AppScreen.History -> features.app.history.History()
-                AppScreen.Scan    -> Scans(onNavigate = {})/*ScannerView(
-                    scanMode = "VERIFY",
-                    onNavigate = {},
-                    onScanResult = {}
-                )*/
+                AppScreen.Scan -> Scans(onNavigate = {})
                 AppScreen.Analytics -> AnalyticsScreen()
                 AppScreen.Profile -> features.profile.ProfileScreen(
                     userName = userDetail?.firstName,
                     email = userDetail?.email,
                     role = userDetail?.role,
                     onNavigate = {},
-                    onNavigateToSubscription = {
-                        onNavigate(Screens.SubscriptionScreen)
-                    },
                     onLogout = {
                         sessionManager.clearSession()
-                        onNavigate(Screens.LoginScreen)
-                    }
+                        GuestPromptState.shownThisLaunch = false
+                        onNavigate(Screens.GuestHomeScreen)
+                    },
+                    onSwitchWarehouseRole = onSwitchWarehouseRole,
                 )
-                else              -> Home(
+                else -> HomeScreen(
                     onNavigate = onNavigate,
-                    onHistoryClick = { activeTab = AppScreen.History }
+                    onHistoryClick = { activeTab = AppScreen.History },
+                    onTrackTrace = { q: BarcodeLookupQuery -> trackTraceQuery = q },
+                )
+            }
+
+            trackTraceQuery?.let { query ->
+                features.app.history.TrackTraceScreen(
+                    lookupQuery = query,
+                    onBack = { trackTraceQuery = null },
                 )
             }
         }
     }
 }
+
+@Composable
+fun StaffBottomNavBar(
+    activeTab: AppScreen,
+    onTabSelected: (AppScreen) -> Unit,
+) {
+    val tabs = listOf(
+        BottomTab(AppScreen.Home, "Home", Icons.Filled.Home),
+        BottomTab(AppScreen.Profile, "Profile", Icons.Filled.Person),
+    )
+
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = Color.White,
+        shadowElevation = 12.dp,
+        tonalElevation = 0.dp,
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .navigationBarsPadding()
+                .height(64.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceEvenly,
+        ) {
+            tabs.forEach { tab ->
+                NavTabItem(
+                    tab = tab,
+                    isSelected = activeTab == tab.route,
+                    onClick = { onTabSelected(tab.route) },
+                    modifier = Modifier.weight(1f),
+                )
+            }
+        }
+    }
+}
+
 @Composable
 fun BottomNavBar(
     activeTab: AppScreen,
@@ -136,7 +209,6 @@ fun BottomNavBar(
             .fillMaxWidth()
             .wrapContentHeight()
     ) {
-        // ── White nav bar background ─────────────────────────────────────
         Surface(
             modifier = Modifier
                 .fillMaxWidth()
@@ -153,7 +225,6 @@ fun BottomNavBar(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.SpaceEvenly
             ) {
-                // Left tabs
                 leftTabs.forEach { tab ->
                     NavTabItem(
                         tab = tab,
@@ -163,10 +234,8 @@ fun BottomNavBar(
                     )
                 }
 
-                // Empty space for FAB
                 Spacer(modifier = Modifier.weight(1f))
 
-                // Right tabs
                 rightTabs.forEach { tab ->
                     NavTabItem(
                         tab = tab,
@@ -178,7 +247,6 @@ fun BottomNavBar(
             }
         }
 
-        // ── Floating Scan button centered above nav bar ──────────────────
         Column(
             modifier = Modifier
                 .align(Alignment.TopCenter)
@@ -203,7 +271,6 @@ fun BottomNavBar(
             }
         }
 
-        // ── Scan label inside the nav bar ────────────────────────────────
         Column(
             modifier = Modifier
                 .align(Alignment.BottomCenter)
@@ -223,6 +290,7 @@ fun BottomNavBar(
         }
     }
 }
+
 @Composable
 fun NavTabItem(
     tab: BottomTab,
@@ -255,26 +323,5 @@ fun NavTabItem(
             fontSize = 11.sp,
             color = color
         )
-    }
-}
-
-@Composable
-fun HistoryPlaceholder() {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Text("History Screen")
-    }
-}
-
-@Composable
-fun ScanPlaceholder() {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Text("Scan Screen")
-    }
-}
-
-@Composable
-fun ProfilePlaceholder() {
-    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-        Text("Profile Screen")
     }
 }

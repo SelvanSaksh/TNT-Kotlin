@@ -28,8 +28,9 @@ import components.AppSwitch
 import components.InputField
 import components.PrimaryButton
 import core.network.models.FetchAi
-import core.network.models.GenerationLogRequest
+import core.location.AppLocationCache
 import core.network.repository.AppRepository
+import core.util.AuditLogHelper
 import core.storage.SessionManager
 import core.storage.getLocalStorage
 import features.app.subscription.BillingRepository
@@ -474,62 +475,19 @@ fun GS1DigitalBarcodeScreen(
                             BillingRepository.incrementUsage(sessionManager, "barcode_generation", 1)
                                 .onFailure { println("⚠️ subscription usage: ${it.message}") }
 
-                            var lat = 0.0
-                            var lon = 0.0
-                            var city: String? = null
-                            var state: String? = null
+                            AppLocationCache.ensureFresh(locationProvider)
+                            AppLocationCache.persistTo(sessionManager)
 
-                            var locationPair: Pair<Double, Double>? = null
-
-                            repeat(3) {
-                                locationPair = locationProvider.getCurrentLocation()
-                                println("📍 Attempt ${it + 1}: $locationPair")
-
-                                if (locationPair != null) return@repeat
-                                kotlinx.coroutines.delay(1000)
-                            }
-
-                            if (locationPair != null) {
-                                lat = locationPair!!.first
-                                lon = locationPair!!.second
-
-                                val locationResult = AppRepository.getLocationDetails(lat, lon)
-
-                                locationResult.onSuccess {
-                                    city = it.city ?: "Unknown"
-                                    state = it.state ?: "Unknown"
-
-                                    println("🏙️ CITY: $city")
-                                    println("🌍 STATE: $state")
-                                }.onFailure {
-                                    println("❌ LOCATION FAILED: ${it.message}")
-                                    city = "Unknown"
-                                    state = "Unknown"
-                                }
-                            }
-
-                            val companyId = sessionManager.getCompanyId()?.toIntOrNull()
-                            if (companyId == null) {
-                                println("❌ COMPANY ID MISSING")
-                                return@launch
-                            }
-
-                            val generationRequest = GenerationLogRequest(
-                                barcode_type = if (barcodeType == BarcodeType.GS1_QR_CODE)
-                                    "GS1-DL QR Code" else "GS1-DL DataMatrix",
-                                barcode_data = url,
-                                company_id = companyId,
-                                lat = lat,
-                                long = lon,
-                                event_id = core.util.newGenerationEventId(),
-                                serial = core.util.extractGs1Serial(url),
-                                batch = core.util.extractGs1Batch(url),
-                                device_type = "android"
+                            val generationRequest = AuditLogHelper.buildGenerationLogRequest(
+                                sessionManager = sessionManager,
+                                barcodeType = if (barcodeType == BarcodeType.GS1_QR_CODE)
+                                    "GS1-QR" else "GS1-DATAMATRIX",
+                                barcodeData = url,
                             )
 
                             println("🚀 DIGITAL LINK AUDIT:")
                             println("📦 URL: $url")
-                            println("📍 lat: $lat, lon: $lon")
+                            println("📍 lat: ${generationRequest.lat}, lon: ${generationRequest.long}, geo: ${generationRequest.geo_location}")
 
                             val auditResult = AppRepository.sendGenerationLog(generationRequest)
 

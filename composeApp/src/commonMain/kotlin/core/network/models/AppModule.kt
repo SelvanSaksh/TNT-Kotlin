@@ -33,8 +33,8 @@ data class LocationDetails(
 
 
 data class NominatimResponse(
-    val display_name: String,
-    val address: Address
+    val display_name: String = "",
+    val address: Address = Address(),
 )
 
 @kotlinx.serialization.Serializable
@@ -96,16 +96,22 @@ data class ScanLogCreateRequest(
     val event_type: String,
     val epc_id: String,
     val event_time: String,
-    val biz_step: String,
-    val biz_location: String,
+    val biz_step: String = "inspecting",
+    val biz_location: String = "urn:epc:id:sgln:0001234.00000.0",
     val geo_location: String,
     val auth_result: String,
     val scanner_id: String,
-    val signature: String,
+    val signature: String = "0xandroid",
     val company_id: Int,
-    val serial: String,
-    val batch: String,
-    val device_type: String
+    val user_id: Int = 0,
+    val lat: Double = 0.0,
+    val long: Double = 0.0,
+    val barcode_type: String = "QR",
+    val barcode_data: String = "",
+    val device_type: String = "android",
+    val serial: String = "",
+    val batch: String = "",
+    val gtin: String = "",
 )
 
 @Serializable
@@ -113,10 +119,19 @@ data class GenerationLogRequest(
     val barcode_type: String,
     val barcode_data: String,
     val company_id: Int,
-    val lat: Double,
-    val long: Double,
+    val user_id: Int = 0,
     val event_id: String,
-    val serial: String,
-    val batch: String,
-    val device_type: String
+    val event_time: String,
+    val epc_id: String = "",
+    val biz_step: String = "encoding",
+    val biz_location: String = "urn:epc:id:sgln:0001234.00000.0",
+    val geo_location: String = "Unknown",
+    val auth_result: String = "AUTHENTIC",
+    val scanner_id: String = "",
+    val signature: String = "0xandroid",
+    val lat: Double = 0.0,
+    val long: Double = 0.0,
+    val device_type: String = "android",
+    val serial: String = "",
+    val batch: String = "",
 )

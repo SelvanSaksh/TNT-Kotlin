@@ -8,16 +8,30 @@ object ApiClient {
 
     val client get() = HttpClientFactory.httpClient
 
-    suspend inline fun <reified T> get(endpoint: String): T {
+    suspend inline fun <reified T> get(
+        endpoint: String,
+        query: Map<String, String> = emptyMap(),
+    ): T {
         return if (endpoint.startsWith("http")) {
-            client.get(endpoint).body()   // ✅ for full URL
+            client.get(endpoint) {
+                query.forEach { (key, value) -> parameter(key, value) }
+            }.body()
         } else {
-            client.get(Config.BASE_URL + endpoint).body() // ✅ for normal API
+            client.get(Config.BASE_URL + endpoint) {
+                query.forEach { (key, value) -> parameter(key, value) }
+            }.body()
         }
     }
 
     suspend inline fun <reified Req, reified Res> post(endpoint: String, payload: Req): Res {
         return client.post(Config.BASE_URL + endpoint) {
+            contentType(ContentType.Application.Json)
+            setBody(payload)
+        }.body()
+    }
+
+    suspend inline fun <reified Req, reified Res> patch(endpoint: String, payload: Req): Res {
+        return client.patch(Config.BASE_URL + endpoint) {
             contentType(ContentType.Application.Json)
             setBody(payload)
         }.body()

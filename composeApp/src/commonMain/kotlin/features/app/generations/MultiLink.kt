@@ -27,6 +27,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import components.InputField
 import components.PrimaryButton
+import core.network.repository.CountriesNowRepository
 import core.storage.SessionManager
 import core.storage.getLocalStorage
 import features.app.subscription.BillingRepository
@@ -101,20 +102,6 @@ data class MultiLinkFormState(
     val device: List<DeviceData> = listOf(DeviceData(id = "1")),
 )
 
-// ─── Sample geo data (replace with country-state-city library or API) ─────────
-private val sampleCountries = listOf("India", "United States", "United Kingdom", "Germany", "France")
-private val sampleStates = mapOf(
-    "India" to listOf("Tamil Nadu", "Maharashtra", "Karnataka", "Delhi"),
-    "United States" to listOf("California", "New York", "Texas", "Florida"),
-    "United Kingdom" to listOf("England", "Scotland", "Wales"),
-)
-private val sampleCities = mapOf(
-    "Tamil Nadu" to listOf("Chennai", "Coimbatore", "Madurai"),
-    "Maharashtra" to listOf("Mumbai", "Pune", "Nagpur"),
-    "California" to listOf("Los Angeles", "San Francisco", "San Diego"),
-    "New York" to listOf("New York City", "Buffalo", "Albany"),
-)
-
 private val availableDevices = listOf("Android", "iPhone")
 
 // ─── Validation ───────────────────────────────────────────────────────────────
@@ -149,6 +136,20 @@ fun MultiLinkBarcodeScreen(
     var form by remember { mutableStateOf(MultiLinkFormState()) }
     val disabled = remember(form) { isFormDisabled(form) }
     var showMultiLinkLimitDialog by remember { mutableStateOf(false) }
+
+    var countries by remember { mutableStateOf<List<String>>(emptyList()) }
+    var loadingCountries by remember { mutableStateOf(false) }
+    var countriesError by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(form.selectedType) {
+        if (form.selectedType != RuleType.LOCATION || countries.isNotEmpty()) return@LaunchedEffect
+        loadingCountries = true
+        countriesError = null
+        CountriesNowRepository.fetchCountries()
+            .onSuccess { countries = it }
+            .onFailure { countriesError = it.message ?: "Failed to load countries" }
+        loadingCountries = false
+    }
 
     /** Increment multi_url usage when host passes a generated image URL (successful backend generation). */
     var lastReportedGenerationUrl by remember { mutableStateOf<String?>(null) }
@@ -247,15 +248,22 @@ fun MultiLinkBarcodeScreen(
                 }
 
                 when (form.selectedType) {
-                    RuleType.LOCATION -> form.locations.forEachIndexed { idx, loc ->
-                        LocationRuleCard(
-                            index = idx,
-                            data = loc,
-                            onUpdate = { updated ->
-                                form = form.copy(locations = form.locations.map { if (it.id == updated.id) updated else it })
-                            },
-                            onRemove = if (idx > 0) ({ form = form.copy(locations = form.locations.filter { it.id != loc.id }) }) else null,
-                        )
+                    RuleType.LOCATION -> {
+                        countriesError?.let { message ->
+                            Text(message, fontSize = 11.sp, color = ErrorRed)
+                        }
+                        form.locations.forEachIndexed { idx, loc ->
+                            LocationRuleCard(
+                                index = idx,
+                                data = loc,
+                                countries = countries,
+                                loadingCountries = loadingCountries,
+                                onUpdate = { updated ->
+                                    form = form.copy(locations = form.locations.map { if (it.id == updated.id) updated else it })
+                                },
+                                onRemove = if (idx > 0) ({ form = form.copy(locations = form.locations.filter { it.id != loc.id }) }) else null,
+                            )
+                        }
                     }
                     RuleType.NUMBER_OF_SCANS -> form.noOfScanData.forEachIndexed { idx, scan ->
                         ScanRuleCard(
@@ -461,9 +469,45 @@ fun MultiLinkBarcodeScreen(
 private fun LocationRuleCard(
     index: Int,
     data: LocationData,
+    countries: List<String>,
+    loadingCountries: Boolean,
     onUpdate: (LocationData) -> Unit,
     onRemove: (() -> Unit)?,
 ) {
+    var states by remember { mutableStateOf<List<String>>(emptyList()) }
+    var cities by remember { mutableStateOf<List<String>>(emptyList()) }
+    var loadingStates by remember { mutableStateOf(false) }
+    var loadingCities by remember { mutableStateOf(false) }
+    var geoError by remember { mutableStateOf<String?>(null) }
+
+    LaunchedEffect(data.country) {
+        states = emptyList()
+        if (data.country.isBlank()) {
+            loadingStates = false
+            return@LaunchedEffect
+        }
+        loadingStates = true
+        geoError = null
+        CountriesNowRepository.fetchStates(data.country)
+            .onSuccess { states = it }
+            .onFailure { geoError = it.message ?: "Failed to load states" }
+        loadingStates = false
+    }
+
+    LaunchedEffect(data.country, data.state) {
+        cities = emptyList()
+        if (data.country.isBlank() || data.state.isBlank()) {
+            loadingCities = false
+            return@LaunchedEffect
+        }
+        loadingCities = true
+        geoError = null
+        CountriesNowRepository.fetchCities(data.country, data.state)
+            .onSuccess { cities = it }
+            .onFailure { geoError = it.message ?: "Failed to load cities" }
+        loadingCities = false
+    }
+
     RuleCardShell(
         title = "Location Rule ${index + 1}",
         icon = Icons.Default.LocationOn,
@@ -479,31 +523,49 @@ private fun LocationRuleCard(
 
         SimpleDropdown(
             label = "Country *",
-            options = sampleCountries,
+            options = countries,
             selected = data.country,
             onSelect = { onUpdate(data.copy(country = it, state = "", city = "")) },
-            placeholder = "Select Country",
+            placeholder = if (loadingCountries) "Loading countries…" else "Select Country",
+            enabled = !loadingCountries && countries.isNotEmpty(),
+            isLoading = loadingCountries,
         )
 
-        val states = sampleStates[data.country] ?: emptyList()
         SimpleDropdown(
             label = "State *",
             options = states,
             selected = data.state,
             onSelect = { onUpdate(data.copy(state = it, city = "")) },
-            placeholder = "Select State",
-            enabled = data.country.isNotBlank(),
+            placeholder = when {
+                loadingStates -> "Loading states…"
+                data.country.isBlank() -> "Select country first"
+                else -> "Select State"
+            },
+            enabled = data.country.isNotBlank() && !loadingStates && states.isNotEmpty(),
+            isLoading = loadingStates,
         )
 
-        val cities = sampleCities[data.state] ?: emptyList()
         SimpleDropdown(
             label = "City *",
             options = cities,
             selected = data.city,
             onSelect = { onUpdate(data.copy(city = it)) },
-            placeholder = "Select City",
-            enabled = data.state.isNotBlank(),
+            placeholder = when {
+                loadingCities -> "Loading cities…"
+                data.state.isBlank() -> "Select state first"
+                else -> "Select City"
+            },
+            enabled = data.state.isNotBlank() && !loadingCities && cities.isNotEmpty(),
+            isLoading = loadingCities,
         )
+
+        geoError?.let { message ->
+            Text(
+                text = message,
+                fontSize = 11.sp,
+                color = ErrorRed,
+            )
+        }
     }
 }
 
@@ -795,6 +857,7 @@ private fun SimpleDropdown(
     onSelect: (String) -> Unit,
     placeholder: String,
     enabled: Boolean = true,
+    isLoading: Boolean = false,
 ) {
     var expanded by remember { mutableStateOf(false) }
     val shape = RoundedCornerShape(12.dp)
@@ -820,8 +883,17 @@ private fun SimpleDropdown(
                     text = selected.ifBlank { placeholder },
                     color = if (selected.isBlank()) Color.Gray else Brand,
                     fontSize = 14.sp,
+                    modifier = Modifier.weight(1f),
                 )
-                ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
+                if (isLoading) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(18.dp),
+                        strokeWidth = 2.dp,
+                        color = Brand,
+                    )
+                } else {
+                    ExposedDropdownMenuDefaults.TrailingIcon(expanded = expanded)
+                }
             }
             ExposedDropdownMenu(
                 expanded = expanded && enabled,

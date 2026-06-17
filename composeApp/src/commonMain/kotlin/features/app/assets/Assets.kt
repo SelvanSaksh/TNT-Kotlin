@@ -399,8 +399,9 @@ fun Assets(
                     TextButton(
                         onClick = {
                             sessionManager.clearSession()
+                            core.storage.GuestPromptState.shownThisLaunch = false
                             showLogoutDialog = false
-                            onNavigate?.invoke(Screens.LoginScreen.destRoute)
+                            onNavigate?.invoke(Screens.GuestHomeScreen.destRoute)
                         }
                     ) {
                         Text("Logout", color = Color.Red)

@@ -3,54 +3,83 @@ package features.app.scans
 import android.content.Intent
 import android.net.Uri
 import android.util.Log
-import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.net.toUri
 import androidx.lifecycle.compose.LocalLifecycleOwner
-import com.example.scanner_sdk.customview.auth.AuthScannerView
+import com.example.scanner_sdk.customview.ScanMode
 import com.example.scanner_sdk.customview.authandsingle.CommonScannerView
-import com.example.scanner_sdk.customview.authandsingle.VerificationScannerView
-import com.example.scanner_sdk.customview.multi.view.MultiScannerView
+import com.example.scanner_sdk.customview.model.ScannerConfig
 import com.example.scanner_sdk.customview.single.ScannerController
-import com.example.scanner_sdk.customview.single.view.SingleScannerView
-import core.network.models.ScanLogCreateRequest
+import core.location.AppLocationCache
 import core.network.repository.AppRepository
+import core.util.AuditLogHelper
+import core.util.ScanAuditLog
 import core.storage.SessionManager
 import core.storage.getLocalStorage
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withTimeoutOrNull
+import network.AUTH_TOKEN
 import dialog.AuthenticProductDialog
+import dialog.Gs1Field
+import dialog.ScanResult
+import dialog.inferBarcodeTypeFromRaw
 import dialog.parseScanResponse
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONArray
 import org.json.JSONObject
 import utils.DeviceLocationProvider
-import kotlin.time.Clock
 import kotlin.time.ExperimentalTime
+
+private fun scanModeLabel(verifyAuthenticity: Boolean, isMultiScan: Boolean): String = when {
+    isMultiScan && verifyAuthenticity -> "MULTI_AUTH"
+    isMultiScan -> "MULTI"
+    verifyAuthenticity -> "VERIFY"
+    else -> "SINGLE"
+}
+
+private fun buildGs1FieldsFromTriple(gtin: String, serial: String, batch: String): List<Gs1Field> {
+    val out = mutableListOf<Gs1Field>()
+    if (gtin.isNotBlank()) out.add(Gs1Field("01", "GTIN", gtin))
+    if (batch.isNotBlank()) out.add(Gs1Field("10", "Batch / Lot", batch))
+    if (serial.isNotBlank()) out.add(Gs1Field("21", "Serial number", serial))
+    return out
+}
 
 @OptIn(ExperimentalTime::class)
 @Composable
 actual fun ScannerView(
-    scanMode: String,
+    verifyAuthenticity: Boolean,
+    isMultiScan: Boolean,
     onScanResult: (String) -> Unit,
     onNavigate: (String) -> Unit
 ) {
-
-    val sessionManager = SessionManager(getLocalStorage())
-    val locationProvider = DeviceLocationProvider()
+    val scanMode = scanModeLabel(verifyAuthenticity, isMultiScan)
+    val sessionManager = remember { SessionManager(getLocalStorage()) }
+    val locationProvider = remember { DeviceLocationProvider() }
 
     val scope = rememberCoroutineScope()
+
+    LaunchedEffect(sessionManager) {
+        AUTH_TOKEN = sessionManager.getAccessToken()
+    }
 
     val context = LocalContext.current
     val lifecycleOwner = LocalLifecycleOwner.current
@@ -60,9 +89,11 @@ actual fun ScannerView(
         (context as androidx.fragment.app.FragmentActivity).supportFragmentManager
 
     var controller by remember { mutableStateOf<ScannerController?>(null) }
-    val jsonResponse = remember { mutableStateOf<String?>(null) }
-    var dialogTrigger by remember { mutableStateOf(0) }
+    var scanDialogResult by remember { mutableStateOf<ScanResult?>(null) }
+    var scanDialogRaw by remember { mutableStateOf("") }
+    var showScanResultDialog by remember { mutableStateOf(false) }
     var rawData by remember { mutableStateOf("") }
+    var sdkScanError by remember { mutableStateOf<String?>(null) }
 
     fun normalizeBarcodeType(rawType: String): String {
         val t = rawType.trim().uppercase()
@@ -215,114 +246,157 @@ actual fun ScannerView(
         return Triple(gtin, serial, batch)
     }
 
-    fun sendScanLog(scannedValue: String, epcCandidate: String, scanMode: String) {
-        scope.launch {
-            val tag = "SCANNERLOG"
-            Log.d(
-                tag,
-                "[$scanMode] sendScanLog() ▶ START epcCandidate='${epcCandidate.take(60)}' scannedValueLen=${scannedValue.length} scannedValuePreview='${scannedValue.take(120)}'"
-            )
+    fun presentParsedScanResult(raw: String, sdkJson: JSONArray?) {
+        val jsonPayload: String = sdkJson?.toString().orEmpty().trim().let { j ->
+            if (j.isNotEmpty() && j != "null") j else ""
+        }
+        val scannedValue: String = if (jsonPayload.isNotBlank()) jsonPayload else raw
+        val (payloadType, payloadData) = extractScanPayload(scannedValue)
+        val (jGtin, jSerial, jBatch) = extractGs1Identifiers(scannedValue)
+        val (uGtin, uSerial, uBatch) = extractGs1IdentifiersFromUrl(raw)
+        val mergedGtin = if (jGtin.isNotBlank()) jGtin else uGtin
+        val mergedSerial = if (jSerial.isNotBlank()) jSerial else uSerial
+        val mergedBatch = if (jBatch.isNotBlank()) jBatch else uBatch
+        val fallbackGs1 = buildGs1FieldsFromTriple(mergedGtin, mergedSerial, mergedBatch)
 
-            var lat = 0.0
-            var lon = 0.0
+        val parsed = when {
+            jsonPayload.isNotEmpty() -> parseScanResponse(jsonPayload, raw)
+            else -> parseScanResponse("", raw)
+        }
 
-            Log.d(tag, "[$scanMode] sendScanLog() ▶ requesting current location…")
-            val locationPair = locationProvider.getCurrentLocation()
-            if (locationPair != null) {
-                lat = locationPair.first
-                lon = locationPair.second
-                Log.d(tag, "[$scanMode] sendScanLog() ✓ location lat=$lat lon=$lon")
+        val mergedFields = when {
+            parsed != null && parsed.gs1Fields.isNotEmpty() -> parsed.gs1Fields
+            else -> fallbackGs1
+        }
 
-                val locationResult = AppRepository.getLocationDetails(lat, lon)
-                locationResult
-                    .onSuccess { loc ->
-                        Log.d(
-                            tag,
-                            "[$scanMode] sendScanLog() ✓ reverse-geocoded city=${loc.city} state=${loc.state} country=${loc.country}"
-                        )
-                    }
-                    .onFailure { err ->
-                        Log.w(tag, "[$scanMode] sendScanLog() ⚠ reverse-geocode failed: ${err.message}")
-                    }
-            } else {
-                Log.w(tag, "[$scanMode] sendScanLog() ⚠ location unavailable, defaulting lat=0 lon=0")
+        scanDialogResult = if (parsed != null) {
+            val mergedBarcodeData = when {
+                parsed.barcodeData.isNotBlank() -> parsed.barcodeData
+                payloadData.isNotBlank() -> payloadData
+                else -> raw
             }
+            val mergedBarcodeType = when {
+                parsed.barcodeType.isNotBlank() -> parsed.barcodeType
+                payloadType.isNotBlank() -> payloadType
+                else -> inferBarcodeTypeFromRaw(raw)
+            }
+            parsed.copy(
+                rawBarcode = raw,
+                barcodeData = mergedBarcodeData,
+                barcodeType = mergedBarcodeType,
+                gs1Fields = mergedFields,
+            )
+        } else {
+            val barcodeData = if (payloadData.isNotBlank()) payloadData else raw
+            val barcodeType =
+                if (payloadType.isNotBlank()) payloadType else inferBarcodeTypeFromRaw(raw)
+            ScanResult(
+                barcodeData = barcodeData,
+                gs1Fields = mergedFields,
+                encryptedText = "",
+                quality = "",
+                rawBarcode = raw,
+                barcodeType = barcodeType,
+            )
+        }
+        scanDialogRaw = raw
+        showScanResultDialog = true
+    }
 
-            val companyId = sessionManager.getCompanyId()?.toIntOrNull()
-                ?: run {
-                    // Fallback: company id is also inside stored user_detail JSON as "companyid"
-                    val ud = sessionManager.getUserDetail().orEmpty()
-                    Log.d(
-                        tag,
-                        "[$scanMode] sendScanLog() ▶ companyId missing in session, falling back to user_detail JSON (len=${ud.length})"
-                    )
-                    runCatching {
-                        JSONObject(ud).optInt("companyid", 0)
-                    }.getOrNull()?.takeIf { it > 0 }
-                }
-                ?: run {
-                    Log.e("ScanLog", "[$scanMode] ❌ Log skipped: companyId missing")
-                    return@launch
-                }
-            Log.d(tag, "[$scanMode] sendScanLog() ✓ companyId=$companyId")
+    suspend fun submitScanAuditLog(scannedValue: String, epcCandidate: String, mode: String) {
+        val tag = "SCAN_AUDIT"
+        try {
+            AUTH_TOKEN = sessionManager.getAccessToken()
+            val loggedIn = sessionManager.isLoggedIn()
+            val userId = sessionManager.getUserId() ?: 0
+            val companyId = AuditLogHelper.resolveCompanyId(sessionManager)
+            Log.i(tag, "[$mode] audit START loggedIn=$loggedIn userId=$userId companyId=$companyId hasToken=${!AUTH_TOKEN.isNullOrBlank()}")
+
+            AppLocationCache.restoreFrom(sessionManager)
+            withTimeoutOrNull(4_000L) {
+                AppLocationCache.ensureFresh(locationProvider)
+                AppLocationCache.persistTo(sessionManager)
+            }
+            Log.i(
+                tag,
+                "[$mode] location lat=${AppLocationCache.latitude} lon=${AppLocationCache.longitude} geo=${AppLocationCache.geoLocation}",
+            )
 
             val (parsedGtin, parsedSerial, parsedBatch) = extractGs1Identifiers(scannedValue)
-            // Fall back to parsing the raw URL (e.g. `https://dl.ratifye.ai/01/<gtin>/10/<batch>?...`)
-            // when the SDK payload didn't include structured AIs.
             val (urlGtin, urlSerial, urlBatch) = extractGs1IdentifiersFromUrl(epcCandidate)
-            val gtin = parsedGtin.ifBlank { urlGtin }
-            val serial = parsedSerial.ifBlank { urlSerial }
-            val batch = parsedBatch.ifBlank { urlBatch }
-            val epcId = gtin.ifBlank { epcCandidate.ifBlank { scannedValue.trim() } }
-            val geoLocation = "$lat,$lon"
-            Log.d(
-                tag,
-                "[$scanMode] sendScanLog() ✓ parsed gs1 gtin='$gtin' serial='$serial' batch='$batch' → epc_id='$epcId'"
-            )
+            val gtin = if (parsedGtin.isNotBlank()) parsedGtin else urlGtin
+            val serial = if (parsedSerial.isNotBlank()) parsedSerial else urlSerial
+            val batch = if (parsedBatch.isNotBlank()) parsedBatch else urlBatch
+            val epcId = when {
+                gtin.isNotBlank() -> gtin
+                epcCandidate.isNotBlank() -> epcCandidate
+                else -> scannedValue.trim()
+            }
+            val payloadSource = if (epcCandidate.isNotBlank()) epcCandidate else scannedValue
+            val (barcodeType, barcodeData) = extractScanPayload(payloadSource)
 
-            val isAuthFlow = scanMode.equals("VERIFY", ignoreCase = true) ||
-                    scanMode.equals("AUTH", ignoreCase = true)
+            val isAuthFlow = mode.equals("VERIFY", ignoreCase = true) ||
+                mode.equals("AUTH", ignoreCase = true) ||
+                mode.equals("MULTI_AUTH", ignoreCase = true)
 
-            val scanRequest = ScanLogCreateRequest(
-                event_type = if (isAuthFlow) "AUTHENTICATE" else "SCAN",
-                epc_id = epcId,
-                event_time = Clock.System.now().toString(),
-                biz_step = "urn:epcglobal:cbv:bizstep:receiving",
-                biz_location = "urn:epc:id:sgln:0000123.00000.0",
-                geo_location = geoLocation,
-                auth_result = if (isAuthFlow) "AUTHENTIC" else "UNKNOWN",
-                scanner_id = "android_${scanMode.lowercase()}",
-                signature = "0xandroid",
-                company_id = companyId,
+            val scanRequest = AuditLogHelper.buildScanLogRequest(
+                sessionManager = sessionManager,
+                epcId = epcId,
+                barcodeType = barcodeType,
+                barcodeData = barcodeData,
+                gtin = gtin,
                 serial = serial,
                 batch = batch,
-                device_type = "android"
+                isAuthFlow = isAuthFlow,
+                scannedValue = scannedValue,
             )
 
-            Log.d(
-                tag,
-                "[$scanMode] sendScanLog() ▶ POSTing /companies/barcode/create event_type=${scanRequest.event_type} auth_result=${scanRequest.auth_result} scanner_id=${scanRequest.scanner_id} epc_id=${scanRequest.epc_id} serial=${scanRequest.serial} batch=${scanRequest.batch} geo_location=${scanRequest.geo_location} companyId=${scanRequest.company_id}"
-            )
-
+            Log.i(tag, "[$mode] POST body=${ScanAuditLog.formatRequestBody(scanRequest)}")
             val result = AppRepository.sendScanCreateLog(scanRequest)
             if (result.isSuccess) {
-                Log.d(
-                    "ScanLog",
-                    "[$scanMode] ✅ Logged scan epc_id=$epcId serial=$serial batch=$batch"
-                )
-                Log.d(tag, "[$scanMode] sendScanLog() ◀ DONE success")
+                Log.i(tag, "[$mode] audit OK epc_id=$epcId")
             } else {
-                val err = result.exceptionOrNull()
-                Log.e(
-                    "ScanLog",
-                    "[$scanMode] ❌ Log failed: ${err?.message}",
-                    err
-                )
-                Log.d(tag, "[$scanMode] sendScanLog() ◀ DONE failure")
+                Log.e(tag, "[$mode] audit FAILED ${result.exceptionOrNull()?.message}", result.exceptionOrNull())
             }
+        } catch (e: Exception) {
+            Log.e(tag, "[$mode] audit crashed: ${e.message}", e)
+            ScanAuditLog.line("[$mode] audit crashed: ${e.message}")
         }
     }
-    // ✅ Step 1 — Declare the launcher
+
+    fun handleScanFromSdk(raw: String, sdkJson: JSONArray?) {
+        val jsonPayload = sdkJson?.toString().orEmpty()
+        val scannedForLog = jsonPayload.trim().let { j ->
+            if (j.isNotEmpty() && j != "null") j else raw
+        }
+        Log.d("SCAN_DETAIL", "========== SCAN [$scanMode] ========== rawLen=${raw.length}")
+
+        scope.launch {
+            launch(Dispatchers.IO) {
+                submitScanAuditLog(
+                    scannedValue = scannedForLog,
+                    epcCandidate = raw,
+                    mode = scanMode,
+                )
+            }
+            rawData = raw
+            onScanResult(scannedForLog)
+            presentParsedScanResult(raw, sdkJson)
+            delay(2000)
+            controller?.shouldResumeScanning = true
+        }
+    }
+
+    val onScanFromSdk = rememberUpdatedState(newValue = ::handleScanFromSdk)
+
+    val userId = sessionManager.getUserId()?.toString().orEmpty().ifBlank { "0" }
+    val companyId = sessionManager.getCompanyId()?.trim().orEmpty().ifBlank { "0" }
+
+    val scannerConfig = ScannerConfig(
+        scanMode = if (isMultiScan) ScanMode.MULTI else ScanMode.SINGLE,
+        verifyAuthenticity = verifyAuthenticity,
+    )
+
     val galleryLauncher = rememberLauncherForActivityResult(
         contract = ActivityResultContracts.GetContent()
     ) { uri: Uri? ->
@@ -330,227 +404,81 @@ actual fun ScannerView(
         controller?.processGalleryImage(
             context = context,
             uri = uri,
-            userId = "1",
-            companyId = "48",
+            userId = userId,
+            companyId = companyId,
         )
     }
 
     AndroidView(
         modifier = Modifier.fillMaxSize(),
         factory = { ctx ->
-
-            when (scanMode) {
-
-                "VERIFY" -> {
-
-                    val view = CommonScannerView(ctx)
-                    controller = ScannerController(
-                        singleScannerView = null,
-                        verificationScanner = null,
-                        commonScannerView = view,
-                        multiScanner = null,
-                        authScannerView = null,
-                        lifecycleOwner = lifecycleOwner,
-                        fragmentManager = fragmentManager,
-                        openGallery = {
-                            galleryLauncher.launch("image/*")
-                        },
-                        result = { scanResult ->
-
-                            rawData = scanResult.first
-                            val scannedValue = scanResult.second.toString()
-                            print("SDK VALUE:"+scannedValue)
-                            onScanResult(scannedValue)
-                            sendScanLog(
-                                scannedValue = scannedValue,
-                                epcCandidate = rawData,
-                                scanMode = scanMode
-                            )
-
-                            jsonResponse.value = scannedValue
-                            dialogTrigger++
-
-                            scope.launch {
-                                delay(2000)
-                                controller?.shouldResumeScanning = true
-                            }
-                        },
-
-//                        result = {
-//                            jsonResponse.value = it.toString()
-//                            showAuthDialog.value = true
-//                        },
-                        error = { err ->
-                            Log.e(
-                                "SCANNERLOG",
-                                "[VERIFY] ❌ SDK error callback code=${err.first} message=${err.second}"
-                            )
-                            Toast.makeText(context, "Error data received : ${err.second}", Toast.LENGTH_SHORT).show()
-
-                            scope.launch {
-                                delay(3000)
-                                controller?.shouldResumeScanning = true
-                            }
-                        }
-                    )
-
-                    Log.d("SCANNERLOG", "[VERIFY] ▶ controller.startCommonScanner(userId=1, companyId=48)")
-                    controller?.startCommonScanner(ctx, "1", "48")
-                    controller?.isVerifyEnabled
-                    Log.d("SCANNERLOG", "[VERIFY] ✓ startCommonScanner() returned, view ready")
-                    view
-                }
-
-                "SINGLE" -> {
-                    Log.d(
+            Log.d(
+                "SCANNERLOG",
+                "[$scanMode] ▶ CommonScannerView factory scanMode=${scannerConfig.scanMode} verifyAuth=${scannerConfig.verifyAuthenticity}"
+            )
+            val view = CommonScannerView(ctx)
+            controller = ScannerController(
+                config = scannerConfig,
+                commonScannerView = view,
+                lifecycleOwner = lifecycleOwner,
+                fragmentManager = fragmentManager,
+                openGallery = { galleryLauncher.launch("image/*") },
+                result = { scanResult ->
+                    onScanFromSdk.value(scanResult.first, scanResult.second)
+                },
+                error = { err ->
+                    Log.e(
                         "SCANNERLOG",
-                        "[SINGLE] ▶ ScannerView factory CALLED — building SingleScannerView"
+                        "[$scanMode] ❌ SDK error code=${err.first} message=${err.second}",
                     )
-                    val view = SingleScannerView(ctx)
-                    Log.d("SCANNERLOG", "[SINGLE] ✓ SingleScannerView instantiated, wiring ScannerController…")
-                    controller = ScannerController(
-                        singleScannerView = view,
-                        multiScanner = null,
-                        authScannerView = null,
-                        lifecycleOwner = lifecycleOwner,
-                        fragmentManager = fragmentManager,
-                        openGallery = {
-                            Log.d("SCANNERLOG", "[SINGLE] ▶ openGallery requested by SDK")
-                            galleryLauncher.launch("image/*")
-                        },
-                        result = { scanResult ->
-                            rawData = scanResult.first
-                            val scannedValue = scanResult.second.toString()
-                            Log.d(
-                                "SCANNERLOG",
-                                "[SINGLE] ✓ SDK result callback fired rawDataLen=${rawData.length} rawData='${rawData.take(80)}' scannedValueLen=${scannedValue.length} scannedValuePreview='${scannedValue.take(120)}'"
-                            )
-                            onScanResult(scannedValue)
-                            Log.d("SCANNERLOG", "[SINGLE] ▶ forwarding to sendScanLog()")
-                            sendScanLog(
-                                scannedValue = scannedValue,
-                                epcCandidate = rawData,
-                                scanMode = scanMode
-                            )
-                        },
-                        error = { err ->
-                            Log.e(
-                                "SCANNERLOG",
-                                "[SINGLE] ❌ SDK error callback code=${err.first} message=${err.second}"
-                            )
-                        }
-                    )
-
-                    Log.d("SCANNERLOG", "[SINGLE] ▶ controller.startSingleScanner()")
-                    controller?.startSingleScanner(ctx)
-                    Log.d("SCANNERLOG", "[SINGLE] ✓ startSingleScanner() returned, view ready")
-                    view
+                    sdkScanError = "Code ${err.first}: ${err.second}"
+                    scope.launch {
+                        delay(3000)
+                        controller?.shouldResumeScanning = true
+                    }
                 }
-
-                "AUTH" -> {
-                    Log.d(
-                        "SCANNERLOG",
-                        "[AUTH] ▶ ScannerView factory CALLED — building AuthScannerView (authentication flow)"
-                    )
-                    val view = AuthScannerView(ctx)
-                    Log.d("SCANNERLOG", "[AUTH] ✓ AuthScannerView instantiated, wiring ScannerController…")
-                    controller = ScannerController(
-                        singleScannerView = null,
-                        multiScanner = null,
-                        authScannerView = view,
-                        lifecycleOwner = lifecycleOwner,
-                        fragmentManager = fragmentManager,
-                        openGallery = {
-                            Log.d("SCANNERLOG", "[AUTH] ▶ openGallery requested by SDK")
-                            galleryLauncher.launch("image/*")
-                        },
-                        result = { scanResult ->
-                            rawData = scanResult.first
-                            val authRes = scanResult.second
-                            val scannedValue = scanResult.second.toString()
-                            Log.d(
-                                "SCANNERLOG",
-                                "[AUTH] Result${authRes}"
-                            )
-
-                            onScanResult(scannedValue)
-                            Log.d("SCANNERLOG", "[AUTH] ▶ forwarding to sendScanLog()")
-                            sendScanLog(
-                                scannedValue = scannedValue,
-                                epcCandidate = rawData,
-                                scanMode = scanMode
-                            )
-                        },
-                        error = { err ->
-                            Log.e(
-                                "SCANNERLOG",
-                                "[AUTH] ❌ SDK error callback code=${err.first} message=${err.second}"
-                            )
-                        }
-                    )
-
-                    Log.d("SCANNERLOG", "[AUTH] ▶ controller.startAuthScanner(userId='', companyId='')")
-                    controller?.startAuthScanner(ctx, "", "")
-                    Log.d("SCANNERLOG", "[AUTH] ✓ startAuthScanner() returned, view ready")
-                    view
-                }
-
-                "MULTI" -> {
-                    val view = MultiScannerView(ctx)
-                    Log.d("SCANNERLOG", "ScannerView: Multi CALLED//////////////")
-                    controller = ScannerController(
-                        singleScannerView = null,
-                        multiScanner = view,
-                        authScannerView = null,
-                        lifecycleOwner = lifecycleOwner,
-                        fragmentManager = fragmentManager,
-                        openGallery = { galleryLauncher.launch("image/*") },
-                        result = { scanResult ->
-                            rawData = scanResult.first
-                            val scannedValue = scanResult.second.toString()
-                            Log.d(
-                                "SCANNERLOG",
-                                "SDK result callback MULTI fired rawData=${rawData.take(60)} scannedValue=${scannedValue.take(80)}"
-                            )
-                            onScanResult(scannedValue)
-                            sendScanLog(
-                                scannedValue = scannedValue,
-                                epcCandidate = rawData,
-                                scanMode = scanMode
-                            )
-                        },
-                        error = {}
-                    )
-
-                    controller?.startMultiScanner(ctx, "1", "48")
-                    view
-                }
-
-                else -> SingleScannerView(ctx)
-            }
+            )
+            Log.d("SCANNERLOG", "[$scanMode] ▶ startCommonScanner(userId=$userId, companyId=$companyId)")
+            controller?.startCommonScanner(ctx, userId, companyId)
+            view
         }
     )
 
-    if (scanMode == "VERIFY" && dialogTrigger > 0) {
-        jsonResponse.value?.let { json ->
-            parseScanResponse(jsonString = json, rawData = rawData)?.let { result ->
-                AuthenticProductDialog(
-                    raw = rawData,
-                    result = result,
-                    onDismiss = { dialogTrigger = 0 },
-                    onContinue = { dialogTrigger = 0 },
-                    onLinkClick = {
-                        val intent = Intent(Intent.ACTION_VIEW, it.toUri())
-                        context.startActivity(intent)
-                    }
-                )
-
-            }
-
+    if (showScanResultDialog) {
+        scanDialogResult?.let { result ->
+            AuthenticProductDialog(
+                raw = scanDialogRaw,
+                result = result,
+                onDismiss = {
+                    showScanResultDialog = false
+                    scanDialogResult = null
+                },
+                onContinue = {
+                    showScanResultDialog = false
+                    scanDialogResult = null
+                },
+                onLinkClick = { url ->
+                    val intent = Intent(Intent.ACTION_VIEW, url.toUri())
+                    context.startActivity(intent)
+                },
+            )
         }
     }
 
-    DisposableEffect(scanMode) {
+    sdkScanError?.let { message ->
+        AlertDialog(
+            onDismissRequest = { sdkScanError = null },
+            title = { Text("Scanner") },
+            text = { Text(message) },
+            confirmButton = {
+                TextButton(onClick = { sdkScanError = null }) {
+                    Text("OK")
+                }
+            },
+        )
+    }
+
+    DisposableEffect(verifyAuthenticity, isMultiScan) {
         onDispose {
             controller?.stop()
         }

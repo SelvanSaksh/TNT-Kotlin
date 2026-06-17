@@ -26,6 +26,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import features.GuestSignInPromptDialog
 import navigation.AppScreen
 import navigation.appscreen.Screens
 
@@ -33,11 +34,15 @@ import navigation.appscreen.Screens
 fun GenerateCodeScreen(
     onBack: () -> Unit,
     onNavigate: (String) -> Unit,
-    onNavigateBarcode: (DynamicBarcodeType) -> Unit
+    onNavigateBarcode: (DynamicBarcodeType) -> Unit,
+    isGuestMode: Boolean = false,
+    showBackButton: Boolean = true,
+    onSignInRequired: () -> Unit = {},
 ) {
     val sessionManager = remember { SessionManager(getLocalStorage()) }
     var selectedTab by remember { mutableStateOf(0) }
     var showLockedDialog by remember { mutableStateOf(false) }
+    var showGuestSignInDialog by remember { mutableStateOf(false) }
 
     val isMultiUrlIncluded = remember {
         val raw = sessionManager.getSubscriptionData().orEmpty()
@@ -74,18 +79,19 @@ fun GenerateCodeScreen(
                 .padding(horizontal = 16.dp, vertical = 12.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            IconButton(
-                onClick = onBack,
-                modifier = Modifier.size(24.dp)
-            ) {
-                Icon(
-                    imageVector = Icons.AutoMirrored.Filled.ArrowBack,
-                    contentDescription = "Back",
-                    tint = primaryColor
-                )
+            if (showBackButton) {
+                IconButton(
+                    onClick = onBack,
+                    modifier = Modifier.size(24.dp)
+                ) {
+                    Icon(
+                        imageVector = Icons.AutoMirrored.Filled.ArrowBack,
+                        contentDescription = "Back",
+                        tint = primaryColor
+                    )
+                }
+                Spacer(modifier = Modifier.width(16.dp))
             }
-
-            Spacer(modifier = Modifier.width(16.dp))
 
             Text(
                 text = "Generate Code",
@@ -176,7 +182,11 @@ fun GenerateCodeScreen(
                     primaryColor = primaryColor,
                     onClick = {
                         if (isLocked) {
-                            showLockedDialog = true
+                            if (isGuestMode) {
+                                showGuestSignInDialog = true
+                            } else {
+                                showLockedDialog = true
+                            }
                             return@OptionCard
                         }
 
@@ -228,6 +238,17 @@ fun GenerateCodeScreen(
             }
         )
     }
+
+    GuestSignInPromptDialog(
+        visible = showGuestSignInDialog,
+        onDismiss = { showGuestSignInDialog = false },
+        onSignIn = {
+            showGuestSignInDialog = false
+            onSignInRequired()
+        },
+        title = "Sign in required",
+        message = "Multi URL and premium generation features require an account. Sign in to continue.",
+    )
 }
 
 @Composable
