@@ -23,6 +23,8 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import components.InputField
 import components.PrimaryButton
+import features.auth.isValidLoginIdentifier
+import features.auth.normalizedLoginIdentifier
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import network.repository.AuthRepository
@@ -87,34 +89,40 @@ fun LoginScreen(
                         userInput = it
                         inputError = null
                     },
-                    placeholder = "Email or Phone"
+                    placeholder = "Email or phone number"
                 )
 
                 PrimaryButton(
                     text = if (isLoading) "Please wait..." else "Continue",
                     isLoading = isLoading,
-                    enabled = userInput.isNotEmpty() && !isLoading,
+                    enabled = userInput.isNotBlank() && !isLoading,
                     modifier = Modifier.fillMaxWidth(),
                     onClick = {
-                        if (userInput.isBlank()) {
-                            inputError = "Please enter Email or Phone"
+                        val trimmed = userInput.trim()
+                        if (trimmed.isBlank()) {
+                            inputError = "Please enter your email or phone number"
+                            return@PrimaryButton
+                        }
+                        if (!isValidLoginIdentifier(trimmed)) {
+                            inputError = "Enter a valid email address or phone number"
                             return@PrimaryButton
                         }
 
                         isLoading = true
                         inputError = null
-                        
+
                         scope.launch {
-                            val result = AuthRepository.sendOtp(userInput.trim())
+                            val identifier = normalizedLoginIdentifier(trimmed)
+                            val result = AuthRepository.sendOtp(identifier)
                             isLoading = false
-                            
+
                             result.onSuccess { response ->
                                 println("OTP Response: $response")
-                                onNavigateToOtp(userInput.trim(), response)
+                                onNavigateToOtp(identifier, response)
                             }.onFailure { error ->
                                 inputError = error.message ?: "Network error. Please try again."
                                 snackbarHostState.showSnackbar(
-                                    error.message ?: "Network error. Please try again."
+                                    error.message ?: "Network error. Please try again.",
                                 )
                             }
                         }

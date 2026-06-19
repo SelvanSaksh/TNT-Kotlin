@@ -7,7 +7,8 @@ import kotlinx.serialization.json.JsonObject
 
 @Serializable
 data class SendOtpRequest(
-    val email: String  // Email address
+    val email: String,
+    val fromMobile: Boolean = true,
 )
 
 @Serializable
@@ -18,15 +19,16 @@ data class SendOtpResponse(
      * receives the OTP via realtime message (SMS / email) instead.
      */
     val otp: String? = null,
-    val expiresAt: String,
-    val email: String,
-    val userId: Int
+    val expiresAt: String? = null,
+    val email: String? = null,
+    val userId: Int? = null,
 )
 
 @Serializable
 data class VerifyOtpRequest(
-    val email: String,
-    val otp: String
+    val otp: String,
+    val email: String? = null,
+    val userId: Int? = null,
 )
 
 @Serializable

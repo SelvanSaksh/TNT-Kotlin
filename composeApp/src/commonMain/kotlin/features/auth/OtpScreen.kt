@@ -74,7 +74,7 @@ fun OtpScreen(
         Spacer(modifier = Modifier.height(8.dp))
 
         Text(
-            text = "We have sent a 6-digit OTP to your mobile number",
+            text = "We've sent a 6-digit code to your email or phone",
             style = MaterialTheme.typography.bodyMedium,
             textAlign = TextAlign.Center,
             color = MaterialTheme.colorScheme.onSurfaceVariant

@@ -76,6 +76,7 @@ fun App() {
 
     var currentScreen by remember { mutableStateOf("") }
     var userIdentifier by remember { mutableStateOf("") }
+    var loginUserId by remember { mutableStateOf<Int?>(null) }
     var autoOtp by remember { mutableStateOf<String?>(null) }
     var isLoading by remember { mutableStateOf(false) }
     val snackbarHostState = remember { SnackbarHostState() }
@@ -196,6 +197,7 @@ fun App() {
                     LoginScreen(
                         onNavigateToOtp = { identifier, otpResponse ->
                             userIdentifier = identifier
+                            loginUserId = otpResponse.userId
                             autoOtp =
                                 if (otpResponse.isAutoGen) otpResponse.otp?.takeIf { it.isNotBlank() } else null
                             navController.navigate(Screens.OTPScreen.destRoute)
@@ -219,7 +221,11 @@ fun App() {
                                 isLoading = true
                                 verifyError = null
 
-                                val result = AuthRepository.verifyOtp(userIdentifier, otp)
+                                val result = AuthRepository.verifyOtp(
+                                    identifier = userIdentifier,
+                                    otp = otp,
+                                    userId = loginUserId,
+                                )
 
                                 result.onSuccess { response ->
 
@@ -310,11 +316,16 @@ fun App() {
                         onResendOtp = {
                             scope.launch {
                                 verifyError = null
-                                AuthRepository.sendOtp(userIdentifier)
+                                AuthRepository.sendOtp(userIdentifier).onSuccess { response ->
+                                    loginUserId = response.userId
+                                    autoOtp =
+                                        if (response.isAutoGen) response.otp?.takeIf { it.isNotBlank() } else null
+                                }
                             }
                         },
                         onBack = {
                             autoOtp = null
+                            loginUserId = null
                             verifyError = null
                             navController.popBackStack()
                         }
@@ -510,7 +521,11 @@ fun App() {
                                 isLoading = true
                                 verifyError = null
 
-                                val result = AuthRepository.verifyOtp(userIdentifier, otp)
+                                val result = AuthRepository.verifyOtp(
+                                    identifier = userIdentifier,
+                                    otp = otp,
+                                    userId = loginUserId,
+                                )
 
                                 result.onSuccess { response ->
                                     val userDetailJson = json.encodeToString(response.userDetail)
