@@ -150,7 +150,7 @@ fun Home(
             try { json.decodeFromString<UserDetail>(it) } catch (e: Exception) { null }
         }
     }
-    val userName     = userDetail?.firstName ?: "User"
+    val userName     = listOfNotNull(userDetail?.firstName, userDetail?.lastName).joinToString(" ").trim().ifBlank { "User" }
     val companyId    = userDetail?.companyId ?: 0
 
     var triggerScan       by remember { mutableStateOf(false) }

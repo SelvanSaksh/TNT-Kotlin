@@ -1,5 +1,6 @@
 package core.network.wms
 
+import network.Config
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -17,6 +18,61 @@ import kotlinx.serialization.json.longOrNull
 import kotlin.math.roundToInt
 
 private val wmsJson = Json { ignoreUnknownKeys = true; explicitNulls = false; isLenient = true }
+
+// ── Pick List Display Status (iOS PickListDisplayStatus) ──────────────────────
+
+enum class PickListDisplayStatus {
+    Created,
+    Assigned,
+    InProgress,
+    Picked,
+    Staged,
+    Completed,
+    Cancelled,
+    Unknown;
+
+    companion object {
+        fun from(status: String?, packingStatus: String?): PickListDisplayStatus {
+            val s = status?.trim()?.uppercase() ?: return Unknown
+            return when (s) {
+                "CREATED" -> Created
+                "ASSIGNED" -> Assigned
+                "IN_PROGRESS" -> InProgress
+                "PICKED" -> Picked
+                "STAGED" -> Staged
+                "COMPLETED" -> Completed
+                "CANCELLED" -> Cancelled
+                else -> when (packingStatus?.trim()?.lowercase()) {
+                    "packing" -> InProgress
+                    "packed" -> Picked
+                    "shipped" -> Completed
+                    else -> Unknown
+                }
+            }
+        }
+    }
+}
+
+enum class PickListStatusFilter(val label: String, val apiStatuses: List<String>) {
+    ALL("ALL", emptyList()),
+    PENDING("Pending", listOf("CREATED")),
+    ASSIGNED("Assigned", listOf("ASSIGNED")),
+    IN_PROGRESS("In Progress", listOf("IN_PROGRESS")),
+    COMPLETED("Completed", listOf("COMPLETED", "CANCELLED", "PICKED", "STAGED"));
+
+    companion object {
+        fun fromDisplayStatus(status: PickListDisplayStatus): PickListStatusFilter = when (status) {
+            PickListDisplayStatus.Created -> PENDING
+            PickListDisplayStatus.Assigned -> ASSIGNED
+            PickListDisplayStatus.InProgress -> IN_PROGRESS
+            PickListDisplayStatus.Picked,
+            PickListDisplayStatus.Staged,
+            PickListDisplayStatus.Completed,
+            PickListDisplayStatus.Cancelled -> COMPLETED
+            PickListDisplayStatus.Unknown -> ALL
+        }
+    }
+}
 
 // ── Picking ───────────────────────────────────────────────────────────────────
 
@@ -80,6 +136,7 @@ data class WmsOrderProduct(
 @Serializable
 data class WmsPickListLine(
     val pickLineId: String? = null,
+    val taskId: String? = null,
     val id: String? = null,
     val orderNumber: String? = null,
     val lineNumber: Int? = null,
@@ -88,26 +145,44 @@ data class WmsPickListLine(
     val productSku: String? = null,
     val requestedQty: String? = null,
     val pickedQty: String? = null,
+    val quantity: Int? = null,
+    val packedQty: Int? = null,
     val remainingQty: Int? = null,
     val status: String? = null,
     val locationCode: String? = null,
     val locationName: String? = null,
     val zone: String? = null,
     val bin: String? = null,
+    val batch: String? = null,
+    val batchNumber: String? = null,
     val pickInstruction: String? = null,
     val sourceLocationId: String? = null,
+    val expiryDate: String? = null,
+    val exceptionTypes: List<String> = emptyList(),
+    val exceptionNotes: String? = null,
     val product: WmsOrderProduct? = null,
+    @SerialName("gtin") val gtinFromTask: String? = null,
 ) {
+    val hasException: Boolean get() = exceptionTypes.isNotEmpty()
     val resolvedId: String
         get() = pickLineId?.takeIf { it.isNotBlank() } ?: id.orEmpty()
 
+    /** Industry packing uses task id for add-to-box PATCH. */
+    val apiTaskOrLineId: String
+        get() = taskId?.trim()?.takeIf { it.isNotBlank() }
+            ?: pickLineId?.trim()?.takeIf { it.isNotBlank() }
+            ?: id.orEmpty()
+
     fun resolvedRequestedQty(): Int {
+        quantity?.takeIf { it > 0 }?.let { return it }
         parseQty(requestedQty)?.takeIf { it > 0 }?.let { return it }
         remainingQty?.takeIf { it > 0 }?.let { return it }
         return 0
     }
 
     fun resolvedPickedQty(): Int = parseQty(pickedQty) ?: 0
+
+    fun resolvedPackedQty(): Int = packedQty ?: 0
     fun resolvedRemainingQty(): Int =
         remainingQty ?: maxOf(0, resolvedRequestedQty() - resolvedPickedQty())
 
@@ -134,8 +209,24 @@ data class WmsPickListLine(
     val displaySku: String
         get() = (product?.resolvedSku ?: productSku)?.trim()?.takeIf { it.isNotEmpty() } ?: "—"
 
+    val displayBatch: String
+        get() = batch?.trim()?.takeIf { it.isNotBlank() }
+            ?: batchNumber?.trim()?.takeIf { it.isNotBlank() }
+            ?: product?.scanBatchNumber?.trim()?.takeIf { it.isNotBlank() }
+            ?: "—"
+
+    val displayQty: String
+        get() {
+            val requested = resolvedRequestedQty()
+            val picked = resolvedPickedQty()
+            return if (picked > 0) "$picked/$requested" else "$requested"
+        }
+
     val scanGtin: String
-        get() = product?.scanGtin.orEmpty()
+        get() = listOfNotNull(
+            gtinFromTask?.trim()?.takeIf { it.isNotEmpty() },
+            product?.scanGtin?.trim()?.takeIf { it.isNotEmpty() },
+        ).firstOrNull().orEmpty()
 
     val scanBatchNumber: String
         get() = product?.scanBatchNumber.orEmpty()
@@ -163,16 +254,46 @@ data class WmsPickListLinesPayload(
 }
 
 @Serializable
+data class WmsPickListSummary(
+    val skuCount: Int? = null,
+    val batchCount: Int? = null,
+    val pickedSkuCount: Int? = null,
+    val progress: String? = null,
+    val totalTasks: Int? = null,
+    val pending: Int? = null,
+    val picked: Int? = null,
+    val totalPackedQty: Int? = null,
+    val remainingToPack: Int? = null,
+    val boxCount: Int? = null,
+    val sealedBoxCount: Int? = null,
+)
+
+@Serializable
+data class WmsPackerInfo(
+    val firstName: String? = null,
+    val lastName: String? = null,
+    val email: String? = null,
+) {
+    val displayName: String
+        get() = listOfNotNull(firstName, lastName).joinToString(" ").takeIf { it.isNotBlank() } ?: email.orEmpty()
+}
+
+@Serializable
 data class WmsPickListItem(
+    @SerialName("id")
+    val numericId: Int? = null,
     val pickListId: String? = null,
     val pickListNumber: String? = null,
+    val pickListCode: String? = null,
     val orderId: String? = null,
     val orderNumber: String? = null,
     val pickType: String? = null,
     val status: String? = null,
     val zone: String? = null,
+    val zoneCode: String? = null,
     val assignedPicker: Int? = null,
-    val priority: Int? = null,
+    val assignedPickerId: Int? = null,
+    val priority: String? = null,
     val lineCount: Int? = null,
     val totalRequestedQty: Int? = null,
     val totalPickedQty: Int? = null,
@@ -180,32 +301,91 @@ data class WmsPickListItem(
     val waveNumber: String? = null,
     val assignedPickerName: String? = null,
     val toteNumber: String? = null,
+    val toteCount: Int? = null,
+    val activeToteNumber: String? = null,
     val stagingLocationId: String? = null,
+    val stagingLocationName: String? = null,
+    val stagedAt: String? = null,
+    val startedAt: String? = null,
+    val completedAt: String? = null,
+    @SerialName("completed_at") val completedAtSnake: String? = null,
     val assignedPacker: Int? = null,
+    val assignedPackerId: Int? = null,
     val assignedPackerName: String? = null,
     val packingOrderId: String? = null,
     val packingNumber: String? = null,
     val packingStatus: String? = null,
+    val displayPackingStatus: String? = null,
+    val packingStartedAt: String? = null,
+    val packedAt: String? = null,
+    val dispatchStatus: String? = null,
+    val dispatchedAt: String? = null,
+    val carrier: String? = null,
+    val trackingNumber: String? = null,
+    val receivingCompanyId: Int? = null,
+    val revingCompanyId: Int? = null,
+    val receivingCompanyName: String? = null,
+    val invoiceFileUrl: String? = null,
+    val invoiceNumber: String? = null,
+    val invoiceDate: String? = null,
+    val createdAt: String? = null,
+    val updatedAt: String? = null,
+    val summary: WmsPickListSummary? = null,
+    val packer: WmsPackerInfo? = null,
+    val boxCount: Int? = null,
+    val completedBoxCount: Int? = null,
+    val openBoxCount: Int? = null,
+    val canComplete: Boolean? = null,
     val lines: List<WmsPickListLine>? = null,
     val pickLines: List<WmsPickListLine>? = null,
+    val tasks: List<WmsPickListLine>? = null,
+    val boxes: List<WmsPackingBoxSummary>? = null,
 ) {
     val id: String
         get() = pickListId?.takeIf { it.isNotBlank() }
+            ?: pickListCode?.takeIf { it.isNotBlank() }
             ?: pickListNumber?.takeIf { it.isNotBlank() }
             ?: orderId.orEmpty()
 
+    /** Numeric id for industry API path params — matches iOS `resolvedAPIListId`. */
+    val resolvedAPIListId: String
+        get() {
+            numericId?.takeIf { it > 0 }?.toString()?.let { return it }
+            for (candidate in listOf(pickListId, pickListNumber)) {
+                val raw = candidate?.trim().orEmpty()
+                if (raw.isNotEmpty() && raw.all { it.isDigit() }) return raw
+            }
+            pickListId?.trim()?.takeIf { it.isNotEmpty() }?.let { return it }
+            val number = pickListNumber?.trim().orEmpty()
+            if (number.isNotEmpty()) return number
+            return id
+        }
+
     val resolvedLines: List<WmsPickListLine>
-        get() = lines?.takeIf { it.isNotEmpty() } ?: pickLines.orEmpty()
+        get() = lines?.takeIf { it.isNotEmpty() }
+            ?: pickLines?.takeIf { it.isNotEmpty() }
+            ?: tasks?.takeIf { it.isNotEmpty() }
+            ?: emptyList()
 
     val displayTitle: String
-        get() = pickListNumber?.takeIf { it.isNotBlank() }
+        get() = pickListCode?.takeIf { it.isNotBlank() }
+            ?: pickListNumber?.takeIf { it.isNotBlank() }
             ?: orderNumber?.takeIf { it.isNotBlank() }
             ?: "Pick list"
 
     val waveDisplayLabel: String?
         get() = waveNumber?.takeIf { it.isNotBlank() }?.let { "Wave $it" }
 
-    val zoneCode: String? get() = zone
+    val resolvedZoneCode: String?
+        get() = zoneCode?.takeIf { it.isNotBlank() } ?: zone?.takeIf { it.isNotBlank() }
+
+    val resolvedAssignedPickerId: Int?
+        get() = assignedPickerId?.takeIf { it > 0 } ?: assignedPicker?.takeIf { it > 0 }
+}
+
+fun WmsPickListItem.isAssignedToPicker(pickerId: Int): Boolean {
+    if (pickerId <= 0) return false
+    return resolvedAssignedPickerId == pickerId
 }
 
 data class WmsPickListsPayload(
@@ -231,22 +411,115 @@ data class PickerMyListTask(
     val isLocked: Boolean = false,
     val lockReason: String? = null,
     val priority: Int = 5,
+    val packingStatus: String? = null,
+    val pickListCode: String? = null,
+    val stagingLocationName: String? = null,
+    val skuCount: Int = 0,
+    val batchCount: Int = 0,
+    val pickedSkuCount: Int = 0,
+    val dispatchStatus: String? = null,
+    val assignedPickerName: String? = null,
+    val resolvedLines: List<WmsPickListLine> = emptyList(),
+    val completedAt: String? = null,
+    val stagedAt: String? = null,
+    val updatedAt: String? = null,
 ) {
     val progress: Float
         get() = if (itemCount <= 0) 0f else (pickedCount.toFloat() / itemCount).coerceIn(0f, 1f)
 
     val isPickedStatus: Boolean
         get() = status == "PICKED" || status == "STAGED"
+
+    val displayStatus: PickListDisplayStatus
+        get() = PickListDisplayStatus.from(status, packingStatus)
+
+    val statusColor: String
+        get() = when (status.uppercase()) {
+            "CREATED" -> "created"
+            "IN_PROGRESS" -> "in_progress"
+            "COMPLETED" -> "completed"
+            else -> when (packingStatus?.lowercase()) {
+                "packing" -> "packing"
+                "packed" -> "packed"
+                "shipped" -> "shipped"
+                else -> status.lowercase()
+            }
+        }
+
+    val subtitle: String
+        get() = buildList {
+            zone?.takeIf { it.isNotBlank() }?.let { add(it) }
+            if (skuCount > 0) add("$skuCount SKUs")
+            if (batchCount > 0) add("$batchCount batches")
+        }.joinToString(" • ")
+
+    val assigneeLabel: String?
+        get() = assignedPickerName?.takeIf { it.isNotBlank() }
+
+    val progressLabel: String
+        get() = if (itemCount > 0) "$pickedCount/$itemCount units" else ""
+
+    val skuProgressLabel: String
+        get() = if (skuCount > 0) "$pickedSkuCount/$skuCount SKUs" else ""
+
+    val linePreview: List<WmsPickListLine>
+        get() = resolvedLines.take(3)
+
+    val hasAssignedTote: Boolean
+        get() = toteNumber?.trim()?.isNotEmpty() == true
+
+    val isCompletedStatus: Boolean
+        get() = status.equals("COMPLETED", ignoreCase = true)
+
+    val resolvedCompletedTimestamp: String?
+        get() = sequenceOf(completedAt, stagedAt, updatedAt)
+            .mapNotNull { it?.trim()?.takeIf { value -> value.isNotEmpty() } }
+            .firstOrNull()
 }
+
+enum class PickerPickFilterCategory(val label: String) {
+    Pending("Pending"),
+    InProgress("In Progress"),
+    Picked("Picked"),
+    Locked("Locked"),
+    ;
+
+    val filterColorHex: Long
+        get() = when (this) {
+            Pending -> 0xFF6B7280
+            InProgress -> 0xFF2563EB
+            Picked -> 0xFF059669
+            Locked -> 0xFF9CA3AF
+        }
+}
+
+fun PickerMyListTask.pickerCardCategory(): PickerPickFilterCategory = when {
+    isLocked -> PickerPickFilterCategory.Locked
+    isPickedStatus -> PickerPickFilterCategory.Picked
+    hasAssignedTote -> PickerPickFilterCategory.InProgress
+    else -> PickerPickFilterCategory.Pending
+}
+
+val PickerMyListTask.pickerStatusLabel: String
+    get() = when (pickerCardCategory()) {
+        PickerPickFilterCategory.Locked -> "LOCKED"
+        PickerPickFilterCategory.Picked -> "PICKED"
+        PickerPickFilterCategory.InProgress -> "IN PROGRESS"
+        PickerPickFilterCategory.Pending -> "ASSIGNED"
+    }
 
 // ── Packing ───────────────────────────────────────────────────────────────────
 
 @Serializable
 data class WmsPackingPickListLine(
     val pickLineId: String? = null,
+    val taskId: String? = null,
     val productId: Int? = null,
     val productName: String? = null,
     val productSku: String? = null,
+    val gtin: String? = null,
+    val batchNumber: String? = null,
+    val expiryDate: String? = null,
     val requestedQty: Int? = null,
     val pickedQty: Int? = null,
     val packedQty: Int? = null,
@@ -254,17 +527,39 @@ data class WmsPackingPickListLine(
     val packingStatus: String? = null,
     val pickLineStatus: String? = null,
     val status: String? = null,
+    val exceptionTypes: List<String> = emptyList(),
+    val exceptionNotes: String? = null,
 ) {
+    val hasException: Boolean get() = exceptionTypes.isNotEmpty()
+
+    val displayGtin: String
+        get() = gtin?.trim()?.takeIf { it.isNotEmpty() } ?: ""
+
+    val hasRegisteredGtinCandidate: Boolean get() = displayGtin.isNotEmpty()
+
     val resolvedId: String
         get() = pickLineId?.takeIf { it.isNotBlank() }
-            ?: "${productId ?: 0}-${productSku.orEmpty()}"
+            ?: "${intProductId ?: 0}-${productSku.orEmpty()}"
 
-    /** Matches iOS `apiPickLineId` — used for add-to-box API calls. */
+    /** Industry add-to-box API uses task id — matches iOS `apiPickLineId`. */
     val apiPickLineId: String
-        get() = pickLineId?.trim()?.takeIf { it.isNotBlank() } ?: resolvedId
+        get() = taskId?.trim()?.takeIf { it.isNotBlank() }
+            ?: pickLineId?.trim()?.takeIf { it.isNotBlank() }
+            ?: resolvedId
+
+    val intProductId: Int? get() = productId
 
     val requiredCount: Int
-        get() = maxOf(requestedQty ?: pickedQty ?: 0, 0)
+        get() {
+            val requested = requestedQty ?: 0
+            return if (requested > 0) requested else pickedCount
+        }
+
+    /** Max qty that can be packed into the current box for this line — matches iOS. */
+    val packableQty: Int
+        get() = pickedCount.takeIf { it > 0 } ?: requiredCount
+
+    val pickedCount: Int get() = maxOf(pickedQty ?: 0, 0)
 
     val packedCount: Int get() = maxOf(packedQty ?: 0, 0)
 
@@ -285,6 +580,22 @@ data class WmsPackingPickListLine(
     val isLineFullyPacked: Boolean
         get() = linePackingStatusLabel(packedCount) == "PACKED" ||
             (remainingToPackCount <= 0 && packedCount >= requiredCount && requiredCount > 0)
+
+    val displayBatch: String
+        get() = batchNumber?.trim()?.takeIf { it.isNotBlank() } ?: "—"
+
+    val displayExpiry: String
+        get() = expiryDate?.trim()?.takeIf { it.isNotBlank() } ?: "—"
+
+    val batchExpiryDetailLine: String
+        get() = "Batch $displayBatch · Exp $displayExpiry"
+
+    val exceptionDetailText: String
+        get() = when {
+            !exceptionNotes.isNullOrBlank() -> exceptionNotes.trim()
+            exceptionTypes.isNotEmpty() -> exceptionTypes.joinToString(", ") { formatPackingExceptionType(it) }
+            else -> "Exception"
+        }
 }
 
 @Serializable
@@ -293,18 +604,47 @@ data class WmsPackingBoxSummary(
     val packLabel: String? = null,
     val packType: String? = null,
     val hierarchyLevel: Int? = null,
+    val parentPackId: String? = null,
     val sscc: String? = null,
+    val barcodeType: String? = null,
+    val barcodeData: String? = null,
+    val barcodeImageUrl: String? = null,
     val status: String? = null,
+    val displayStatus: String? = null,
+    val packageStatus: String? = null,
     val itemCount: Int? = null,
     val totalPackedQty: Int? = null,
+    val items: List<WmsPackingBoxItem>? = null,
 ) {
-    val resolvedPackId: String get() = packId.orEmpty()
+    val id: String get() = resolvedPackId
+
+    val resolvedPackId: String
+        get() = packId?.trim()?.takeIf { it.isNotBlank() }.orEmpty()
+    val resolvedParentPackId: String? get() = parentPackId?.trim()?.takeIf { it.isNotBlank() }
+    val resolvedPackType: String
+        get() = packType?.trim()?.uppercase()?.takeIf { it.isNotBlank() }
+            ?: when (hierarchyLevel) {
+                3 -> "PALLET"
+                else -> "CARTON"
+            }
+    val resolvedTotalPackedQty: Int
+        get() = totalPackedQty ?: items?.sumOf { it.quantity ?: 0 } ?: 0
+    val resolvedItemCount: Int
+        get() = itemCount ?: items?.size ?: 0
     val isSecondaryPackage: Boolean get() = (hierarchyLevel ?: 2) == 2
     val isTertiaryPackage: Boolean get() = (hierarchyLevel ?: 0) == 3
+    val isPackedListSummary: Boolean get() = resolvedPackType == "PACKED_LIST"
+    val hasIndustryBoxId: Boolean
+        get() = resolvedPackId.toIntOrNull()?.let { it > 0 } == true
+
+    val normalizedBoxStatusLabel: String
+        get() = WmsIndustryPackingStatus.normalizedBoxLabel(status, displayStatus ?: packageStatus)
+
     val isCompleted: Boolean
-        get() = status?.uppercase() in setOf("COMPLETED", "SEALED", "PACKED")
+        get() = WmsIndustryPackingStatus.isBoxSealed(normalizedBoxStatusLabel)
+
     val isInProgress: Boolean
-        get() = !isCompleted && resolvedPackId.isNotBlank()
+        get() = !isCompleted && WmsIndustryPackingStatus.isBoxOpen(normalizedBoxStatusLabel)
 
     val displayTitle: String
         get() = packLabel?.trim()?.takeIf { it.isNotBlank() }
@@ -312,6 +652,18 @@ data class WmsPackingBoxSummary(
             ?: "Package"
 
     val resolvedSscc: String get() = sscc?.trim().orEmpty()
+
+    val displaySubtitle: String
+        get() {
+            val type = resolvedPackType
+            val statusLabel = status?.trim().orEmpty().ifBlank { packageStatus?.trim().orEmpty() }
+            return when {
+                type.isNotBlank() && statusLabel.isNotBlank() -> "$type · $statusLabel"
+                statusLabel.isNotBlank() -> statusLabel
+                type.isNotBlank() -> type
+                else -> ""
+            }
+        }
 
     fun packTypeUiLabel(): String =
         when {
@@ -325,13 +677,19 @@ data class WmsPackingPickListItem(
     val packingOrderId: String? = null,
     val packingNumber: String? = null,
     val packingStatus: String? = null,
+    val displayPackingStatus: String? = null,
     val status: String? = null,
     val pickListId: String? = null,
     val pickListNumber: String? = null,
+    val pickListCode: String? = null,
     val orderId: String? = null,
     val orderNumber: String? = null,
+    val zoneCode: String? = null,
+    val zone: String? = null,
     val toteNumber: String? = null,
     val stagingLocationName: String? = null,
+    val packingStartedAt: String? = null,
+    val packedAt: String? = null,
     val lineCount: Int? = null,
     val totalRequestedQty: Int? = null,
     val totalPickedQty: Int? = null,
@@ -339,6 +697,10 @@ data class WmsPackingPickListItem(
     val totalRemainingToPackQty: Int? = null,
     val packingProgress: String? = null,
     val boxCount: Int? = null,
+    val inProgressBoxCount: Int? = null,
+    val completedBoxCount: Int? = null,
+    val openBoxCount: Int? = null,
+    val canComplete: Boolean? = null,
     val lines: List<WmsPackingPickListLine>? = null,
     val boxes: List<WmsPackingBoxSummary>? = null,
 ) {
@@ -350,10 +712,33 @@ data class WmsPackingPickListItem(
     val displayTitle: String
         get() = packingNumber?.takeIf { it.isNotBlank() }
             ?: pickListNumber?.takeIf { it.isNotBlank() }
+            ?: pickListCode?.takeIf { it.isNotBlank() }
             ?: "Packing list"
 
+    /** Packer home card title — e.g. PICK-00023 from numeric pick list id. */
+    val cardTitle: String
+        get() = formatPickListDisplayId(pickListId, pickListNumber, pickListCode)
+
+    val resolvedZoneCode: String?
+        get() = zoneCode?.takeIf { it.isNotBlank() } ?: zone?.takeIf { it.isNotBlank() }
+
+    val packingProgressLabel: String?
+        get() {
+            val progress = packingProgress?.trim().orEmpty()
+            if (progress.isNotEmpty()) return progress.replace('_', ' ').uppercase()
+            if (isPackingQtyComplete && !isPackingStatusPacked) {
+                if (isReadyForPackerFinish) return "CREATE PALLET OR COMPLETE"
+                return if (hasOpenPackingBoxes) "SEAL OPEN BOXES" else "FULLY PACKED"
+            }
+            if (displayPackingStatusLabel == "PENDING") return "NOT STARTED"
+            return null
+        }
+
     val displayPackingStatusLabel: String
-        get() = packingStatus?.trim()?.uppercase()?.takeIf { it.isNotBlank() } ?: "PENDING"
+        get() = WmsIndustryPackingStatus.normalizedListLabel(packingStatus, displayPackingStatus)
+
+    val isPackingStatusPacked: Boolean
+        get() = WmsIndustryPackingStatus.isListPacked(displayPackingStatusLabel)
 
     val packLines: List<WmsPackingPickListLine> get() = lines.orEmpty()
 
@@ -363,9 +748,9 @@ data class WmsPackingPickListItem(
             ?: 0
 
     val resolvedTotalRequestedQty: Int
-        get() = totalRequestedQty?.takeIf { it > 0 }
-            ?: totalPickedQty?.takeIf { it > 0 }
-            ?: packLines.sumOf { it.requiredCount }.takeIf { it > 0 }
+        get() = totalPickedQty?.takeIf { it > 0 }
+            ?: totalRequestedQty?.takeIf { it > 0 }
+            ?: packLines.sumOf { it.pickedCount }.takeIf { it > 0 }
             ?: 0
 
     val isPackingQtyComplete: Boolean
@@ -374,14 +759,68 @@ data class WmsPackingPickListItem(
             || (packLines.isNotEmpty() && packLines.all { it.isLineFullyPacked })
             || (resolvedTotalRequestedQty > 0 && resolvedTotalPackedQty >= resolvedTotalRequestedQty)
 
-    val isPackingStatusPacked: Boolean get() = displayPackingStatusLabel == "PACKED"
-    val isReadyToMarkPacked: Boolean get() = isPackingQtyComplete && !isPackingStatusPacked
+    val isReadyToMarkPacked: Boolean
+        get() = isPackingQtyComplete && !isPackingStatusPacked && !hasOpenPackingBoxes
+
+    val hasOpenPackingBoxes: Boolean
+        get() {
+            if ((openBoxCount ?: 0) > 0) return true
+            if ((inProgressBoxCount ?: 0) > 0) return true
+            boxes?.let { list ->
+                if (list.any { !it.isCompleted && !it.isPackedListSummary }) return true
+            }
+            return false
+        }
+
+    val isReadyForPackerFinish: Boolean
+        get() = canComplete == true ||
+            (isPackingQtyComplete && !hasOpenPackingBoxes && !isPackingStatusPacked)
+
+    val isPackingWorkflowComplete: Boolean
+        get() {
+            if (hasOpenPackingBoxes) return false
+            if (isPackingStatusPacked) return isPackingQtyComplete
+            if (!isPackingQtyComplete) return false
+            val anyBoxes = (boxCount ?: 0) > 0 || boxes.orEmpty().isNotEmpty()
+            if (!anyBoxes) return false
+            return boxes?.all { it.isCompleted } ?: false
+        }
+
+    val isPackingSessionActive: Boolean
+        get() {
+            if (isPackingStatusPacked) return false
+            if (displayPackingStatusLabel == "IN_PROGRESS") {
+                if (resolvedTotalPackedQty > 0) return true
+                if (packLines.any { it.packedCount > 0 }) return true
+            }
+            if (hasOpenPackingBoxes && resolvedTotalPackedQty > 0) return true
+            if (hasOpenPackingBoxes && packLines.any { it.packedCount > 0 }) return true
+            if (isReadyForPackerFinish) return true
+            if ((inProgressBoxCount ?: 0) > 0) return true
+            if (boxes.orEmpty().any { !it.isCompleted && !it.isPackedListSummary }) return true
+            val anyBoxes = (boxCount ?: 0) > 0 || boxes.orEmpty().isNotEmpty()
+            if (anyBoxes && isPackingQtyComplete && !isPackingWorkflowComplete) return true
+            return false
+        }
+
+    val cardStatusLabel: String
+        get() = when {
+            isPackingStatusPacked && isPackingQtyComplete -> "PACKED"
+            isPackingSessionActive -> "IN PROGRESS"
+            else -> "PENDING"
+        }
 
     val isPackingInProgress: Boolean
-        get() = displayPackingStatusLabel.replace(' ', '_') == "IN_PROGRESS"
+        get() = isPackingSessionActive
 
     val resolvedInProgressBoxes: List<WmsPackingBoxSummary>
         get() = boxes.orEmpty().filter { it.isInProgress }
+
+    val hasOpenBoxesForContinue: Boolean
+        get() = isPackingSessionActive
+
+    val openBoxesForContinue: List<WmsPackingBoxSummary>
+        get() = boxes.orEmpty().filter { !it.isCompleted && !it.isPackedListSummary }
 }
 
 data class WmsPackingPickListsByPackerPayload(
@@ -394,11 +833,30 @@ data class WmsPackingPickListsByPackerPayload(
 data class WmsPackingBoxItem(
     val packItemId: String? = null,
     val pickLineId: String? = null,
+    @SerialName("taskId") val taskIdAlt: String? = null,
+    val pickListId: String? = null,
     val productId: Int? = null,
     val productName: String? = null,
     val productSku: String? = null,
+    @SerialName("sku") val sku: String? = null,
+    val batch: String? = null,
+    @SerialName("batchNumber") val batchNumber: String? = null,
     val quantity: Int? = null,
-)
+    val childPackId: String? = null,
+    val childPackLabel: String? = null,
+    val childPackType: String? = null,
+    @SerialName("childPackSSCC") val childPackSscc: String? = null,
+    val childPackStatus: String? = null,
+    val childBox: WmsPackingBoxNested? = null,
+) {
+    val resolvedProductSku: String?
+        get() = productSku?.trim()?.takeIf { it.isNotBlank() } ?: sku?.trim()?.takeIf { it.isNotBlank() }
+
+    val resolvedBatch: String?
+        get() = batch?.trim()?.takeIf { it.isNotBlank() } ?: batchNumber?.trim()?.takeIf { it.isNotBlank() }
+
+    val isChildPackReference: Boolean get() = !childPackId.isNullOrBlank()
+}
 
 @Serializable
 data class WmsPackingBoxNested(
@@ -468,8 +926,10 @@ data class WmsCreatedPackingBox(
             ?: box?.sscc?.trim().orEmpty()
 
     val resolvedBarcodeImageUrl: String?
-        get() = barcodeImageUrl?.trim()?.takeIf { it.isNotBlank() }
-            ?: box?.barcodeImageUrl?.trim()?.takeIf { it.isNotBlank() }
+        get() = resolveMediaUrl(
+            barcodeImageUrl?.trim()?.takeIf { it.isNotBlank() }
+                ?: box?.barcodeImageUrl?.trim()?.takeIf { it.isNotBlank() },
+        )
 
     val resolvedPackageStatus: String
         get() = status?.trim()?.uppercase()?.takeIf { it.isNotBlank() }
@@ -485,12 +945,145 @@ data class WmsCreatedPackingBox(
     val hasPackageContents: Boolean
         get() = resolvedTotalPackedQty > 0 || resolvedItems.isNotEmpty()
 
-    fun packedQtyForLine(pickLineId: String): Int {
-        val key = pickLineId.trim()
+    fun packedQtyForLine(lineKey: String): Int {
+        val key = lineKey.trim()
+        if (key.isEmpty()) return 0
         return resolvedItems
-            .filter { (it.pickLineId?.trim() ?: "") == key }
+            .filter { item ->
+                val pickLine = item.pickLineId?.trim().orEmpty()
+                val taskId = item.taskIdAlt?.trim().orEmpty()
+                pickLine == key || taskId == key
+            }
             .sumOf { it.quantity ?: 0 }
     }
+}
+
+/** Optimistic merge when box refresh fails — matches iOS `boxWithItemMerged`. */
+fun WmsCreatedPackingBox.withItemMerged(
+    line: WmsPackingPickListLine,
+    quantity: Int,
+    packerId: Int? = null,
+): WmsCreatedPackingBox {
+    val lineKey = line.apiPickLineId.trim()
+    val newItem = WmsPackingBoxItem(
+        pickLineId = line.apiPickLineId,
+        taskIdAlt = line.taskId ?: line.apiPickLineId,
+        productId = line.intProductId,
+        productName = line.productName,
+        productSku = line.productSku,
+        quantity = quantity,
+    )
+    val mergedItems = resolvedItems.toMutableList()
+    val existingIndex = mergedItems.indexOfFirst { item ->
+        val pickLine = item.pickLineId?.trim().orEmpty()
+        val taskId = item.taskIdAlt?.trim().orEmpty()
+        pickLine == lineKey || taskId == lineKey
+    }
+    if (existingIndex >= 0) {
+        val existing = mergedItems[existingIndex]
+        mergedItems[existingIndex] = existing.copy(
+            quantity = (existing.quantity ?: 0) + quantity,
+        )
+    } else {
+        mergedItems += newItem
+    }
+    return copy(
+        items = mergedItems,
+        itemCount = mergedItems.size,
+        totalPackedQty = mergedItems.sumOf { it.quantity ?: 0 },
+    )
+}
+
+/** Keep the richer in-session box state when merging with a server refresh. */
+fun WmsCreatedPackingBox.mergeSessionState(other: WmsCreatedPackingBox): WmsCreatedPackingBox {
+    val preferThis = when {
+        resolvedItems.isNotEmpty() && other.resolvedItems.isEmpty() -> true
+        other.resolvedItems.isNotEmpty() && resolvedItems.isEmpty() -> false
+        else -> resolvedTotalPackedQty >= other.resolvedTotalPackedQty
+    }
+    val primary = if (preferThis) this else other
+    val secondary = if (preferThis) other else this
+    val mergedItems = when {
+        primary.resolvedItems.isNotEmpty() -> primary.resolvedItems
+        secondary.resolvedItems.isNotEmpty() -> secondary.resolvedItems
+        else -> emptyList()
+    }
+    return primary.copy(
+        packLabel = primary.packLabel?.takeIf { it.isNotBlank() } ?: secondary.packLabel,
+        sscc = primary.sscc?.takeIf { it.isNotBlank() } ?: secondary.sscc,
+        barcodeType = primary.barcodeType?.takeIf { it.isNotBlank() } ?: secondary.barcodeType,
+        barcodeData = primary.barcodeData?.takeIf { it.isNotBlank() } ?: secondary.barcodeData,
+        barcodeImageUrl = primary.barcodeImageUrl?.takeIf { it.isNotBlank() } ?: secondary.barcodeImageUrl,
+        items = mergedItems.takeIf { it.isNotEmpty() },
+        itemCount = mergedItems.size.takeIf { it > 0 } ?: primary.itemCount ?: secondary.itemCount,
+        totalPackedQty = maxOf(resolvedTotalPackedQty, other.resolvedTotalPackedQty),
+        status = primary.status?.takeIf { it.isNotBlank() } ?: secondary.status,
+    )
+}
+
+/** Keep a known box/pallet id when seal/link responses omit `id` / `packId` (iOS parity). */
+fun WmsCreatedPackingBox.preservingPackId(fallback: String): WmsCreatedPackingBox {
+    val trimmed = fallback.trim()
+    if (resolvedPackId.isNotBlank() || trimmed.isEmpty()) return this
+    return copy(packId = trimmed)
+}
+
+/** Force the session id after seal — some backends return a new row id instead of the sealed box. */
+fun WmsCreatedPackingBox.withKnownPackId(knownId: String): WmsCreatedPackingBox {
+    val known = knownId.trim()
+    if (known.isEmpty()) return this
+    return copy(packId = known)
+}
+
+/** Build a box session from list/summary data — matches iOS `WMSCreatedPackingBox(from: summary)`. */
+fun WmsPackingBoxSummary.toCreatedPackingBox(): WmsCreatedPackingBox =
+    WmsCreatedPackingBox(
+        packId = resolvedPackId.takeIf { it.isNotBlank() } ?: packId,
+        packLabel = packLabel,
+        packType = packType ?: resolvedPackType,
+        hierarchyLevel = hierarchyLevel,
+        sscc = sscc,
+        barcodeType = barcodeType,
+        barcodeData = barcodeData?.trim()?.takeIf { it.isNotBlank() }
+            ?: resolvedSscc.takeIf { it.isNotBlank() },
+        barcodeImageUrl = barcodeImageUrl,
+        itemCount = itemCount ?: items?.size,
+        totalPackedQty = totalPackedQty ?: resolvedTotalPackedQty,
+        status = status ?: packageStatus,
+        items = items,
+    )
+
+/** Merge richer industry box metadata into an active session box (barcode image, counts, items). */
+fun WmsCreatedPackingBox.enrichedFrom(summary: WmsPackingBoxSummary): WmsCreatedPackingBox {
+    val sessionItems = resolvedItems
+    return copy(
+        packId = resolvedPackId.ifBlank { summary.resolvedPackId }.ifBlank { packId },
+        packLabel = packLabel?.takeIf { it.isNotBlank() } ?: summary.packLabel,
+        packType = packType?.takeIf { it.isNotBlank() } ?: summary.packType ?: summary.resolvedPackType,
+        hierarchyLevel = hierarchyLevel ?: summary.hierarchyLevel,
+        sscc = sscc?.takeIf { it.isNotBlank() } ?: summary.sscc,
+        barcodeType = barcodeType?.takeIf { it.isNotBlank() } ?: summary.barcodeType,
+        barcodeData = barcodeData?.takeIf { it.isNotBlank() }
+            ?: summary.barcodeData?.trim()?.takeIf { it.isNotBlank() }
+            ?: summary.resolvedSscc.takeIf { it.isNotBlank() },
+        barcodeImageUrl = barcodeImageUrl?.takeIf { it.isNotBlank() } ?: summary.barcodeImageUrl,
+        itemCount = sessionItems.size.takeIf { it > 0 } ?: itemCount ?: summary.itemCount,
+        totalPackedQty = maxOf(resolvedTotalPackedQty, summary.resolvedTotalPackedQty),
+        status = status?.takeIf { it.isNotBlank() } ?: summary.status ?: summary.packageStatus,
+        items = sessionItems.takeIf { it.isNotEmpty() }
+            ?: summary.items?.takeIf { it.isNotEmpty() },
+    )
+}
+
+internal fun resolveMediaUrl(raw: String?): String? {
+    val trimmed = raw?.trim()?.takeIf { it.isNotBlank() } ?: return null
+    if (trimmed.startsWith("http://", ignoreCase = true) ||
+        trimmed.startsWith("https://", ignoreCase = true)
+    ) {
+        return trimmed
+    }
+    if (trimmed.startsWith("/")) return Config.BASE_URL + trimmed
+    return trimmed
 }
 
 // ── Receiving ─────────────────────────────────────────────────────────────────
@@ -588,6 +1181,8 @@ data class WmsPackingReceiverNode(
     val pickListId: String? = null,
     val pickListNumber: String? = null,
     val pickLineId: String? = null,
+    val packingOrderId: String? = null,
+    val lineCount: Int? = null,
     val productId: Int? = null,
     val productName: String? = null,
     val productSku: String? = null,
@@ -599,6 +1194,7 @@ data class WmsPackingReceiverNode(
     val packType: String? = null,
     val sscc: String? = null,
     val quantity: Int? = null,
+    val batch: String? = null,
     val packingStatus: String? = null,
     val packingNumber: String? = null,
     val toteNumber: String? = null,
@@ -628,9 +1224,9 @@ data class WmsPackingReceiverNode(
     val displayTitle: String
         get() = when (normalizedNodeType) {
             "ORDER" -> orderNumber ?: orderId ?: "Order"
-            "PICK_LIST" -> pickListNumber ?: pickListId ?: "Pick list"
+            "PICK_LIST" -> formatPickListDisplayId(pickListId, pickListNumber)
             "LINE" -> productName ?: productSku ?: "Line item"
-            "PACK_ITEM" -> productName ?: productSku ?: "Pack item"
+            "PACK_ITEM" -> productName ?: productSku ?: batch ?: "Pack item"
             "BOX" -> packLabel ?: sscc ?: "Box"
             else -> nodeType ?: "Node"
         }
@@ -653,7 +1249,15 @@ data class WmsPackingReceiverNode(
                     else -> ""
                 }
             }
-            "PACK_ITEM" -> quantity?.let { "$it units" }.orEmpty()
+            "PACK_ITEM" -> {
+                val sku = productSku?.trim().orEmpty()
+                val qty = quantity?.let { "$it units" }.orEmpty()
+                when {
+                    sku.isNotEmpty() && qty.isNotEmpty() -> "SKU $sku · $qty"
+                    sku.isNotEmpty() -> "SKU $sku"
+                    else -> qty
+                }
+            }
             else -> productSku.orEmpty()
         }
 
@@ -742,9 +1346,526 @@ data class WmsPackingReceiverNode(
 @Serializable
 data class WmsAssignPickListRequest(
     val pickerId: Int,
-    val zone: String,
+)
+
+@Serializable
+data class PickerExceptionDetail(
+    val type: String = "",
+    val qty: Int = 0,
+)
+
+fun parsePickerExceptionSummary(summary: String): List<PickerExceptionDetail> {
+    val main = summary.substringBefore(" — ").trim()
+    if (main.isBlank()) return emptyList()
+    val pattern = Regex("""([^·×]+?)\s*×(\d+)""")
+    return pattern.findAll(main).mapNotNull { match ->
+        val label = match.groupValues[1].trim()
+        val qty = match.groupValues[2].toIntOrNull() ?: return@mapNotNull null
+        if (qty <= 0) return@mapNotNull null
+        PickerExceptionDetail(pickerExceptionLabelToType(label), qty)
+    }.toList()
+}
+
+fun pickerExceptionLabelToType(label: String): String = when (label.trim().lowercase()) {
+    "shortage" -> "SHORTAGE"
+    "damaged" -> "DAMAGED"
+    "bin empty" -> "BIN_EMPTY"
+    "wrong batch" -> "WRONG_BATCH"
+    "not found" -> "NOT_FOUND"
+    "other" -> "OTHER"
+    else -> label.trim().uppercase().replace(' ', '_')
+}
+
+fun FefoBatchItem.stateKey(): String {
+    val task = resolvedTaskIdString
+    if (task.isNotBlank()) return "task:$task"
+    return "batch:${resolvedBatch}|${resolvedLocation}|$batchSequence"
+}
+
+fun FefoBatchItem.batchPickKey(groupKey: String, groupIndex: Int, batchIndex: Int): String {
+    val task = resolvedTaskIdString
+    if (task.isNotBlank()) return "task:$task"
+    val groupPart = groupKey.trim().ifBlank { "idx:$groupIndex" }
+    return "pick:$groupPart:$batchIndex:${resolvedBatch}|${resolvedLocation}|$batchSequence"
+}
+
+fun FefoBatchItem.matchesBatch(other: FefoBatchItem): Boolean = stateKey() == other.stateKey()
+
+fun FefoBatchItem.matchesBatchAt(
+    other: FefoBatchItem,
+    groupIndex: Int,
+    batchIndex: Int,
+    groupKey: String = "",
+): Boolean {
+    if (groupIndex >= 0 && batchIndex >= 0) {
+        return batchPickKey(groupKey, groupIndex, batchIndex) ==
+            other.batchPickKey(groupKey, groupIndex, batchIndex)
+    }
+    return matchesBatch(other)
+}
+
+@Serializable
+data class FefoBatchItem(
+    val taskId: Int = 0,
+    @SerialName("id") val id: Int? = null,
+    @SerialName("pickLineId") val pickLineId: String? = null,
+    @SerialName("pick_line_id") val pickLineIdSnake: String? = null,
+    val batchSequence: Int = 0,
+    val batchLabel: String = "",
+    val batch: String = "",
+    @SerialName("batchNumber") val batchNumber: String? = null,
+    @SerialName("batch_number") val batchNumberSnake: String? = null,
+    val location: String = "",
+    @SerialName("locationCode") val locationCode: String? = null,
+    @SerialName("location_code") val locationCodeSnake: String? = null,
+    val bin: String = "",
+    val requestedQty: Int = 0,
+    @SerialName("quantity") val quantity: Int? = null,
+    @SerialName("qty") val qty: Int? = null,
+    val pickedQty: Int = 0,
+    @SerialName("picked_qty") val pickedQtySnake: Int? = null,
+    val status: String = "pending",
+    val exceptionMessage: String = "",
+    @SerialName("exception_message") val exceptionMessageSnake: String? = null,
+    @SerialName("shortfallQty") val shortfallQty: Int? = null,
+    @SerialName("shortfall_qty") val shortfallQtySnake: Int? = null,
+    @SerialName("exceptionTypes") val exceptionTypes: List<String> = emptyList(),
+    @SerialName("exception_types") val exceptionTypesSnake: List<String>? = null,
+    @SerialName("exceptionNotes") val exceptionNotes: String? = null,
+    @SerialName("exception_notes") val exceptionNotesSnake: String? = null,
+    @SerialName("notes") val notes: String? = null,
+    @SerialName("exception") val exception: String? = null,
+    val exceptionDetails: List<PickerExceptionDetail> = emptyList(),
+) {
+    val resolvedTaskId: Int
+        get() = taskId.takeIf { it > 0 } ?: id?.takeIf { it > 0 } ?: 0
+
+    val resolvedTaskIdString: String
+        get() = sequenceOf(
+            pickLineId?.trim()?.takeIf { it.isNotEmpty() },
+            pickLineIdSnake?.trim()?.takeIf { it.isNotEmpty() },
+            taskId.takeIf { it > 0 }?.toString(),
+            id?.takeIf { it > 0 }?.toString(),
+        ).filterNotNull().firstOrNull().orEmpty()
+    /** Resolves batch from `batch`, `batchNumber`, or `batch_number` (same as iOS). */
+    val resolvedBatch: String
+        get() = sequenceOf(batch, batchNumber, batchNumberSnake)
+            .mapNotNull { it?.trim()?.takeIf { value -> value.isNotEmpty() } }
+            .firstOrNull()
+            .orEmpty()
+
+    val resolvedRequestedQty: Int
+        get() = when {
+            requestedQty > 0 -> requestedQty
+            quantity != null && quantity > 0 -> quantity
+            qty != null && qty > 0 -> qty
+            else -> requestedQty
+        }
+
+    val resolvedPickedQty: Int
+        get() = pickedQty.takeIf { it > 0 } ?: pickedQtySnake ?: 0
+
+    val resolvedExceptionQty: Int
+        get() {
+            val fromDetails = resolvedExceptionDetails.sumOf { it.qty }
+            if (fromDetails > 0) return fromDetails
+            return shortfallQty?.takeIf { it > 0 } ?: shortfallQtySnake?.takeIf { it > 0 } ?: 0
+        }
+
+    val resolvedExceptionDetails: List<PickerExceptionDetail>
+        get() {
+            val withQty = exceptionDetails.filter { it.qty > 0 && it.type.isNotBlank() }
+            if (withQty.isNotEmpty()) return withQty
+
+            val summaryText = sequenceOf(
+                exceptionMessage,
+                exceptionNotes,
+                exceptionNotesSnake,
+                exception,
+            ).mapNotNull { it?.trim()?.takeIf { value -> value.isNotEmpty() } }.firstOrNull().orEmpty()
+            val parsed = parsePickerExceptionSummary(summaryText)
+            if (parsed.isNotEmpty()) return parsed
+
+            val types = exceptionTypes.ifEmpty { exceptionTypesSnake.orEmpty() }
+                .map { it.trim() }
+                .filter { it.isNotEmpty() }
+            val total = shortfallQty?.takeIf { it > 0 } ?: shortfallQtySnake?.takeIf { it > 0 } ?: 0
+            if (types.isNotEmpty() && total > 0) {
+                return listOf(PickerExceptionDetail(types.first(), total))
+            }
+            if (types.isNotEmpty() && resolvedPickedQty < resolvedRequestedQty) {
+                return listOf(
+                    PickerExceptionDetail(
+                        types.first(),
+                        resolvedRequestedQty - resolvedPickedQty,
+                    ),
+                )
+            }
+            return emptyList()
+        }
+
+    val resolvedLocation: String
+        get() = sequenceOf(location, locationCode, locationCodeSnake, bin)
+            .mapNotNull { it?.trim()?.takeIf { value -> value.isNotEmpty() } }
+            .firstOrNull()
+            .orEmpty()
+
+    val hasException: Boolean
+        get() {
+            if (exceptionMessage.isNotBlank()) return true
+            if (exceptionTypes.isNotEmpty() || !exceptionTypesSnake.isNullOrEmpty()) return true
+            if (exceptionDetails.isNotEmpty()) return true
+            if ((shortfallQty ?: 0) > 0 || (shortfallQtySnake ?: 0) > 0) return true
+            if (!exceptionNotes.isNullOrBlank() || !exceptionNotesSnake.isNullOrBlank()) return true
+            if (!exception.isNullOrBlank()) return true
+            val normalized = status.trim().lowercase()
+            return normalized.contains("exception")
+        }
+
+    val isPartialPicked: Boolean
+        get() = hasException &&
+            resolvedRequestedQty > 0 &&
+            resolvedPickedQty < resolvedRequestedQty
+
+    val isFullyPicked: Boolean
+        get() = when {
+            hasException -> true
+            resolvedRequestedQty > 0 && resolvedPickedQty >= resolvedRequestedQty -> true
+            else -> false
+        }
+
+    val remainingPickQty: Int
+        get() = if (hasException) {
+            0
+        } else {
+            maxOf(0, resolvedRequestedQty - resolvedPickedQty)
+        }
+
+    /** Picked normally or closed out via exception — counts toward picker progress/SKUs. */
+    val isPickerHandled: Boolean
+        get() {
+            if (isFullyPicked) return true
+            val normalized = status.trim().lowercase()
+            if (normalized == "picked" || normalized == "completed") return true
+            if (normalized.contains("exception")) return true
+            return false
+        }
+}
+
+/** Exception rows for line-item UI — always returns entries when [hasException]. */
+fun FefoBatchItem.displayExceptionEntries(): List<PickerExceptionDetail> {
+    if (!hasException) return emptyList()
+
+    val structured = exceptionDetails.filter { it.qty > 0 && it.type.isNotBlank() }
+    if (structured.isNotEmpty()) return structured
+
+    val parsed = parsePickerExceptionSummary(
+        sequenceOf(exceptionMessage, exceptionNotes, exceptionNotesSnake, exception)
+            .mapNotNull { it?.trim()?.takeIf { value -> value.isNotEmpty() } }
+            .firstOrNull()
+            .orEmpty(),
+    )
+    if (parsed.isNotEmpty()) return parsed
+
+    val fromResolved = resolvedExceptionDetails
+    if (fromResolved.isNotEmpty()) return fromResolved
+
+    val types = exceptionTypes.ifEmpty { exceptionTypesSnake.orEmpty() }
+        .map { it.trim() }
+        .filter { it.isNotEmpty() }
+    val missingQty = maxOf(0, resolvedRequestedQty - resolvedPickedQty)
+    val exceptionQty = when {
+        (shortfallQty ?: 0) > 0 -> shortfallQty!!
+        (shortfallQtySnake ?: 0) > 0 -> shortfallQtySnake!!
+        missingQty > 0 -> missingQty
+        else -> 0
+    }
+    if (types.isNotEmpty() && exceptionQty > 0) {
+        return listOf(PickerExceptionDetail(types.first(), exceptionQty))
+    }
+    if (types.isNotEmpty()) {
+        return types.map { PickerExceptionDetail(it, missingQty.coerceAtLeast(1)) }
+    }
+    if (exceptionMessage.isNotBlank() && missingQty > 0) {
+        return listOf(PickerExceptionDetail("OTHER", missingQty))
+    }
+    return emptyList()
+}
+
+/** Human-readable notes / message for line-item exception UI (excludes qty summary when breakdown is shown). */
+fun FefoBatchItem.resolvedExceptionMessage(): String {
+    val explicitNotes = sequenceOf(exceptionNotes, exceptionNotesSnake, notes, exception)
+        .mapNotNull { it?.trim()?.takeIf { value -> value.isNotEmpty() } }
+        .firstOrNull()
+    if (!explicitNotes.isNullOrBlank()) return explicitNotes
+
+    val resolvedMsg = exceptionMessage.ifBlank { exceptionMessageSnake.orEmpty() }
+
+    val trailingNotes = resolvedMsg.substringAfter(" — ", "").trim()
+    if (trailingNotes.isNotBlank()) return trailingNotes
+
+    if (resolvedMsg.isNotBlank()) {
+        return resolvedMsg.trim()
+    }
+    return ""
+}
+
+@Serializable
+data class FefoProductGroup(
+    val key: String = "",
+    val productName: String = "",
+    val sku: String = "",
+    val gtin: String = "",
+    val status: String = "pending",
+    val totalRequested: Int = 0,
+    val totalPicked: Int = 0,
+    val batchCount: Int = 0,
+    val batches: List<FefoBatchItem> = emptyList(),
+    @SerialName("exceptionTypes") val exceptionTypes: List<String> = emptyList(),
+    @SerialName("exception_types") val exceptionTypesSnake: List<String>? = null,
+    @SerialName("exceptionNotes") val exceptionNotes: String? = null,
+    @SerialName("exception_notes") val exceptionNotesSnake: String? = null,
+) {
+    val resolvedExceptionTypes: List<String>
+        get() = exceptionTypes.ifEmpty { exceptionTypesSnake.orEmpty() }
+
+    val resolvedExceptionNotes: String?
+        get() = exceptionNotes?.trim()?.takeIf { it.isNotEmpty() }
+            ?: exceptionNotesSnake?.trim()?.takeIf { it.isNotEmpty() }
+
+    val effectiveBatchCount: Int
+        get() = maxOf(batchCount, batches.size).takeIf { it > 0 } ?: batches.size
+
+    val isComplete: Boolean
+        get() = batches.isNotEmpty() && batches.all { it.isPickerHandled }
+
+    val isFullyPicked: Boolean
+        get() = batches.isNotEmpty() && batches.all { it.isFullyPicked }
+
+    val pickedBatchCount: Int
+        get() = batches.count { it.isPickerHandled }
+}
+
+@Serializable
+data class FefoTasksResponse(
+    val tasks: List<FefoProductGroup> = emptyList(),
+    val items: List<FefoProductGroup> = emptyList(),
+)
+
+internal fun decodeFefoPickListTasks(raw: String): List<FefoProductGroup> {
+    val element = runCatching { wmsJson.parseToJsonElement(raw) }.getOrNull() ?: return emptyList()
+    val groups = when (element) {
+        is JsonArray -> element.mapNotNull { decodeFefoProductGroupElement(it) }
+        is JsonObject -> {
+            val nested = element.pickArray("tasks", "items", "data", "lines", "pickTasks")
+            if (nested.isNotEmpty()) {
+                nested.mapNotNull { decodeFefoProductGroupElement(it) }
+            } else {
+                listOfNotNull(decodeFefoProductGroupElement(element))
+            }
+        }
+        else -> emptyList()
+    }
+    return normalizeFefoProductGroups(groups)
+}
+
+private fun decodeFefoProductGroupElement(element: JsonElement): FefoProductGroup? {
+    val obj = element.jsonObject
+    val batchArray = obj.pickArray("batches")
+    if (batchArray.isNotEmpty()) {
+        val base = runCatching {
+            wmsJson.decodeFromJsonElement(FefoProductGroup.serializer(), element)
+        }.getOrNull() ?: return null
+        val parentTaskId = obj.optionalString("taskId", "task_id", "id", "pickLineId", "pick_line_id")
+        val parentTypes = obj.decodeStringList("exceptionTypes", "exception_types")
+        val parentNotes = obj.optionalString("exceptionNotes", "exception_notes", "notes")
+        val parentShortfall = obj.optionalInt("shortfallQty", "shortfall_qty")
+        val batches = batchArray.mapIndexed { index, batchElement ->
+            val decoded = decodeFefoBatchFromJson(batchElement.jsonObject)
+            val withParentTask = if (decoded.resolvedTaskIdString.isBlank() && !parentTaskId.isNullOrBlank()) {
+                decoded.copy(pickLineId = parentTaskId)
+            } else {
+                decoded
+            }
+            withParentTask.copy(
+                batchSequence = withParentTask.batchSequence.takeIf { it > 0 } ?: (index + 1),
+                exceptionTypes = withParentTask.exceptionTypes.ifEmpty { parentTypes },
+                exceptionNotes = withParentTask.exceptionNotes ?: parentNotes,
+                shortfallQty = withParentTask.shortfallQty ?: parentShortfall,
+            )
+        }
+        return normalizeFefoProductGroup(
+            base.copy(
+                batches = batches,
+                exceptionTypes = base.exceptionTypes.ifEmpty { parentTypes },
+                exceptionNotes = base.exceptionNotes ?: parentNotes,
+            ),
+        )
+    }
+    return normalizeFefoProductGroup(flatTaskToProductGroup(obj))
+}
+
+private fun flatTaskToProductGroup(obj: JsonObject): FefoProductGroup {
+    val batch = decodeFefoBatchFromJson(obj)
+    val key = obj.optionalString("key", "productId", "product_id", "sku")
+        ?: batch.resolvedBatch.ifBlank { batch.resolvedLocation }.ifBlank { "task" }
+    val requested = batch.resolvedRequestedQty
+    val picked = batch.resolvedPickedQty
+    return FefoProductGroup(
+        key = key,
+        productName = obj.optionalString("productName", "product_name", "name").orEmpty(),
+        sku = obj.optionalString("sku", "productSku", "product_sku").orEmpty(),
+        gtin = obj.optionalString("gtin").orEmpty(),
+        status = obj.optionalString("status").orEmpty(),
+        totalRequested = requested,
+        totalPicked = picked,
+        batchCount = 1,
+        batches = listOf(batch),
+        exceptionTypes = obj.decodeStringList("exceptionTypes", "exception_types"),
+        exceptionNotes = obj.optionalString("exceptionNotes", "exception_notes", "notes"),
+    )
+}
+
+private fun decodeFefoBatchFromJson(obj: JsonObject): FefoBatchItem {
+    val base = runCatching {
+        wmsJson.decodeFromJsonElement(FefoBatchItem.serializer(), obj)
+    }.getOrNull()
+    val taskIdStr = obj.optionalString("taskId", "task_id", "id", "pickLineId", "pick_line_id")
+    val taskIdInt = taskIdStr?.toIntOrNull() ?: base?.taskId ?: 0
+    val idInt = obj.optionalString("id")?.toIntOrNull() ?: base?.id
+    val shortfall = obj.optionalInt("shortfallQty", "shortfall_qty")
+    return (base ?: FefoBatchItem()).copy(
+        taskId = taskIdInt,
+        id = idInt,
+        pickLineId = taskIdStr?.takeIf { taskIdInt <= 0 } ?: base?.pickLineId,
+        batch = obj.optionalString("batch", "batchNumber", "batch_number") ?: base?.batch.orEmpty(),
+        batchNumber = obj.optionalString("batchNumber", "batch_number") ?: base?.batchNumber,
+        location = obj.optionalString("location", "locationCode", "location_code", "bin")
+            ?: base?.location.orEmpty(),
+        locationCode = obj.optionalString("locationCode", "location_code") ?: base?.locationCode,
+        requestedQty = obj.optionalInt("requestedQty", "requested_qty", "quantity", "qty")
+            ?: base?.requestedQty ?: 0,
+        pickedQty = obj.optionalInt("pickedQty", "picked_qty") ?: base?.pickedQty ?: 0,
+        status = obj.optionalString("status") ?: base?.status.orEmpty(),
+        shortfallQty = shortfall ?: base?.shortfallQty,
+        exceptionTypes = obj.decodeStringList("exceptionTypes", "exception_types")
+            .ifEmpty { base?.exceptionTypes.orEmpty() },
+        exceptionMessage = obj.optionalString("exceptionMessage", "exception_message")
+            ?: base?.exceptionMessage.orEmpty(),
+        exceptionNotes = obj.optionalString("exceptionNotes", "exception_notes", "notes")
+            ?: base?.exceptionNotes,
+        batchSequence = obj.optionalInt("batchSequence", "batch_sequence") ?: base?.batchSequence ?: 0,
+        batchLabel = obj.optionalString("batchLabel", "batch_label") ?: base?.batchLabel.orEmpty(),
+    )
+}
+
+private fun normalizeFefoProductGroups(groups: List<FefoProductGroup>): List<FefoProductGroup> {
+    val expanded = groups.map { normalizeFefoProductGroup(it) }
+    val grouped = expanded.groupBy { group ->
+        group.key.trim().ifBlank {
+            group.sku.trim().ifBlank { group.productName.trim().ifBlank { group.gtin } }
+        }
+    }
+    return grouped.values.map { mergeFefoProductGroups(it) }
+}
+
+private fun mergeFefoProductGroups(groups: List<FefoProductGroup>): FefoProductGroup {
+    val first = groups.first()
+    val batches = groups.flatMap { it.batches }
+    return first.copy(
+        batches = batches,
+        batchCount = maxOf(first.batchCount, batches.size),
+        totalRequested = batches.sumOf { it.resolvedRequestedQty },
+        totalPicked = batches.sumOf { it.resolvedPickedQty },
+        exceptionTypes = groups.flatMap { it.resolvedExceptionTypes }.distinct(),
+        exceptionNotes = groups.firstNotNullOfOrNull { it.resolvedExceptionNotes },
+    )
+}
+
+private fun normalizeFefoProductGroup(group: FefoProductGroup): FefoProductGroup {
+    val batches = group.batches
+    return group.copy(
+        batches = batches,
+        batchCount = maxOf(group.batchCount, batches.size),
+        totalRequested = batches.sumOf { it.resolvedRequestedQty }.takeIf { it > 0 } ?: group.totalRequested,
+        totalPicked = batches.sumOf { it.resolvedPickedQty }.takeIf { it > 0 } ?: group.totalPicked,
+    )
+}
+
+@Serializable
+data class FefoConfirmTaskRequest(
+    val pickerId: Int,
+    val pickedQty: Int,
+    val toteId: Int,
+    val scannedGtin: String? = null,
+    val scannedBatch: String? = null,
+    val actualBin: String? = null,
+)
+
+@Serializable
+data class PickExceptionRequest(
+    val companyId: Int,
+    val pickerId: Int,
+    val exceptionTypes: List<String>,
+    val qtyFound: Int,
+    val notes: String? = null,
+)
+
+@Serializable
+data class ToteAssignRequest(
+    val toteNumber: String,
+    val pickerId: Int? = null,
+    val markPreviousFilled: Boolean? = null,
+)
+
+@Serializable
+data class StartPickListRequest(
     val toteNumber: String? = null,
 )
+
+@Serializable
+data class WmsIndustryPickListActionResponse(
+    val success: Boolean? = null,
+    val message: String? = null,
+    val status: String? = null,
+    val pickListId: String? = null,
+    val toteId: Int? = null,
+    val activeToteId: Int? = null,
+) {
+    val resolvedToteId: Int?
+        get() = listOfNotNull(toteId, activeToteId).firstOrNull { it > 0 }
+}
+
+@Serializable
+data class ToteCatalogResponse(
+    val pickingListId: Int = 0,
+    val activeToteNumber: String = "",
+    val totes: List<ToteCatalogItem> = emptyList(),
+)
+
+@Serializable
+data class ToteCatalogItem(
+    val toteId: Int? = null,
+    val id: Int? = null,
+    val toteNumber: String = "",
+    val status: String = "",
+    val sequence: Int = 0,
+    val filledAt: String? = null,
+    val scannedAt: String? = null,
+    val scannedBy: Int? = null,
+    val batchCount: Int = 0,
+    val itemCount: Int = 0,
+    val isActive: Boolean = false,
+) {
+    val resolvedToteId: Int?
+        get() = listOfNotNull(toteId, id).firstOrNull { it > 0 }
+
+    val isFilledOrStaged: Boolean
+        get() = status.trim().lowercase() in setOf("filled", "staged")
+
+    val isToteActive: Boolean
+        get() = isActive || status.trim().lowercase() == "active"
+}
 
 @Serializable
 data class WmsPatchPickListLineUpdate(
@@ -765,6 +1886,12 @@ data class WmsStagePickListRequest(
     val companyId: Int,
     val stagingLocationId: String? = null,
     val stagingLocationName: String? = null,
+)
+
+@Serializable
+data class WmsIndustryStagePickListRequest(
+    val companyId: Int,
+    val stagingLocationName: String,
 )
 
 @Serializable
@@ -850,6 +1977,180 @@ data class WmsUser(
 
 // ── JSON helpers ──────────────────────────────────────────────────────────────
 
+fun formatPickListDisplayId(
+    pickListId: String?,
+    pickListNumber: String? = null,
+    pickListCode: String? = null,
+): String {
+    val fromNumber = pickListNumber?.trim().orEmpty()
+    if (fromNumber.isNotEmpty()) {
+        val match = Regex("(?i)PICK-?(\\d+)").find(fromNumber)
+        if (match != null) {
+            val digits = match.groupValues[1].toIntOrNull()
+            if (digits != null) return "PICK-000$digits"
+        }
+    }
+    val numeric = pickListId?.trim()?.toIntOrNull()
+        ?: pickListId?.filter { it.isDigit() }?.toIntOrNull()
+    if (numeric != null && numeric > 0) {
+        return "PICK-000$numeric"
+    }
+    return fromNumber.ifBlank { pickListCode?.trim().orEmpty() }.ifBlank { "PICK-00000" }
+}
+
+fun WmsPackingPickListItem.buildPickListHierarchyNode(boxes: List<WmsPackingBoxSummary>): WmsPackingReceiverNode {
+    val lineChildren = packLines.map { line ->
+        WmsPackingReceiverNode(
+            nodeType = "LINE",
+            pickLineId = line.apiPickLineId,
+            productId = line.productId,
+            productName = line.productName ?: line.productSku,
+            productSku = line.productSku,
+            requestedQty = line.requiredCount,
+            pickedQty = line.pickedCount,
+            packedQty = line.packedCount,
+            packingStatus = line.linePackingStatusLabel(line.packedCount),
+        )
+    }
+
+    val filtered = boxes.filter { box ->
+        box.resolvedPackId.isNotBlank() && !box.isPackedListSummary
+    }
+    val topLevel = filtered.filter { box ->
+        box.resolvedParentPackId.isNullOrBlank()
+    }
+
+    fun buildBoxNode(box: WmsPackingBoxSummary): WmsPackingReceiverNode {
+        val children = mutableListOf<WmsPackingReceiverNode>()
+        val attachedChildIds = mutableSetOf<String>()
+
+        if (box.isTertiaryPackage) {
+            filtered.filter { it.resolvedParentPackId == box.resolvedPackId }
+                .forEach { child ->
+                    attachedChildIds += child.resolvedPackId
+                    children += buildBoxNode(child)
+                }
+        }
+
+        box.items.orEmpty().forEach { item ->
+            when {
+                item.childBox != null -> {
+                    val summary = item.childBox.toBoxSummary()
+                    val childId = summary.resolvedPackId
+                    if (box.isTertiaryPackage && childId.isNotBlank() && childId !in attachedChildIds) {
+                        attachedChildIds += childId
+                        children += buildBoxNode(summary)
+                    } else if (!box.isTertiaryPackage) {
+                        children += item.toHierarchyProductItemNode()
+                    }
+                }
+                item.isChildPackReference -> {
+                    val childId = item.childPackId?.trim().orEmpty()
+                    val matched = filtered.firstOrNull { it.resolvedPackId == childId }
+                    if (box.isTertiaryPackage && matched != null && childId !in attachedChildIds) {
+                        attachedChildIds += childId
+                        children += buildBoxNode(matched)
+                    } else if (box.isTertiaryPackage) {
+                        children += item.toHierarchyCartonReferenceNode()
+                    } else {
+                        children += item.toHierarchyProductItemNode()
+                    }
+                }
+                else -> children += item.toHierarchyProductItemNode()
+            }
+        }
+
+        return WmsPackingReceiverNode(
+            nodeType = "BOX",
+            status = box.status ?: box.packageStatus,
+            totalPackedQty = box.resolvedTotalPackedQty,
+            packId = box.packId,
+            packLabel = box.packLabel,
+            packType = box.resolvedPackType,
+            sscc = box.resolvedSscc.takeIf { it.isNotBlank() },
+            hierarchyLevel = box.hierarchyLevel,
+            children = children.takeIf { it.isNotEmpty() },
+        )
+    }
+
+    val boxChildren = topLevel.map { buildBoxNode(it) }
+    val packageCount = boxChildren.size.takeIf { it > 0 } ?: (boxCount ?: 0)
+    return WmsPackingReceiverNode(
+        nodeType = "PICK_LIST",
+        pickListId = pickListId,
+        pickListNumber = cardTitle,
+        status = cardStatusLabel,
+        packingOrderId = packingOrderId,
+        lineCount = lineCount ?: packLines.size,
+        totalPickedQty = totalPickedQty ?: resolvedTotalRequestedQty,
+        totalPackedQty = resolvedTotalPackedQty,
+        boxCount = packageCount,
+        children = lineChildren + boxChildren,
+    )
+}
+
+fun WmsPackingPickListItem.wrapPickListHierarchyOrder(pickListNode: WmsPackingReceiverNode): WmsPackingReceiverNode =
+    WmsPackingReceiverNode(
+        nodeType = "ORDER",
+        orderId = orderId,
+        orderNumber = orderNumber,
+        orderStatus = cardStatusLabel,
+        packedPickListCount = 1,
+        completedBoxCount = completedBoxCount,
+        totalBoxCount = boxCount ?: pickListNode.boxCount,
+        children = listOf(pickListNode),
+    )
+
+private fun WmsPackingBoxItem.toHierarchyProductItemNode(): WmsPackingReceiverNode =
+    WmsPackingReceiverNode(
+        nodeType = "PACK_ITEM",
+        productName = productName ?: resolvedProductSku ?: resolvedBatch ?: "Item",
+        productSku = resolvedProductSku,
+        quantity = quantity,
+        batch = resolvedBatch,
+    )
+
+private fun WmsPackingBoxItem.toHierarchyCartonReferenceNode(): WmsPackingReceiverNode =
+    WmsPackingReceiverNode(
+        nodeType = "PACK_ITEM",
+        status = childPackStatus,
+        productName = childPackLabel ?: childPackSscc ?: "Carton",
+        packType = childPackType ?: "CARTON",
+        sscc = childPackSscc,
+        quantity = quantity,
+    )
+
+private fun WmsPackingBoxItem.toHierarchyPackItemNode(): WmsPackingReceiverNode {
+    childBox?.let { nested ->
+        val summary = nested.toBoxSummary()
+        return WmsPackingReceiverNode(
+            nodeType = "PACK_ITEM",
+            status = summary.status ?: summary.packageStatus,
+            productName = summary.displayTitle,
+            packType = summary.resolvedPackType,
+            sscc = summary.resolvedSscc.takeIf { it.isNotBlank() },
+            quantity = quantity ?: summary.resolvedTotalPackedQty,
+        )
+    }
+    if (isChildPackReference) {
+        return toHierarchyCartonReferenceNode()
+    }
+    return toHierarchyProductItemNode()
+}
+
+private fun WmsPackingBoxNested.toBoxSummary(): WmsPackingBoxSummary =
+    WmsPackingBoxSummary(
+        packId = packId,
+        packLabel = packLabel,
+        packType = packType ?: "CARTON",
+        hierarchyLevel = hierarchyLevel ?: 2,
+        status = status,
+        sscc = sscc,
+        itemCount = itemCount ?: items?.size,
+        totalPackedQty = totalPackedQty,
+        items = items,
+    )
+
 internal fun decodePickListsPayload(raw: String): WmsPickListsPayload {
     val element = wmsJson.parseToJsonElement(raw)
     if (element is JsonArray) {
@@ -927,21 +2228,144 @@ internal fun decodeReceiverReceivingStatus(raw: String): WmsPackingReceiverRecei
 internal fun decodePackingBoxes(raw: String): List<WmsPackingBoxSummary> {
     val element = wmsJson.parseToJsonElement(raw)
     if (element is JsonArray) {
-        return element.mapNotNull {
-            runCatching { wmsJson.decodeFromJsonElement(WmsPackingBoxSummary.serializer(), it) }.getOrNull()
-        }
+        return element.mapNotNull { decodePackingBoxSummary(it) }
     }
     val obj = element.jsonObject
-    return obj.pickArray("boxes", "data").mapNotNull {
-        runCatching { wmsJson.decodeFromJsonElement(WmsPackingBoxSummary.serializer(), it) }.getOrNull()
-    }
+    return obj.pickArray("boxes", "data", "lists").mapNotNull { decodePackingBoxSummary(it) }
+}
+
+/** Matches iOS `WMSPackingBoxSummary.init(json:)` — resolves `packId` from aliases and nested `box`. */
+internal fun decodePackingBoxSummary(element: JsonElement): WmsPackingBoxSummary? {
+    val obj = element as? JsonObject ?: return null
+    val nested = obj["box"]?.jsonObject
+    val base = runCatching { wmsJson.decodeFromJsonElement(WmsPackingBoxSummary.serializer(), element) }.getOrNull()
+        ?: nested?.let {
+            runCatching { wmsJson.decodeFromJsonElement(WmsPackingBoxSummary.serializer(), it) }.getOrNull()
+        }
+        ?: WmsPackingBoxSummary()
+
+    val resolvedPackId = base.packId?.trim()?.takeIf { it.isNotBlank() }
+        ?: obj.optionalString("packId", "pack_id")
+        ?: nested?.optionalString("packId", "pack_id")
+        ?: obj.optionalString("boxId", "box_id")
+        ?: nested?.optionalString("boxId", "box_id")
+        ?: obj.optionalInt("id")?.toString()
+        ?: nested?.optionalInt("id")?.toString()
+
+    val packLabel = base.packLabel?.trim()?.takeIf { it.isNotBlank() }
+        ?: obj.optionalString("packLabel", "pack_label")
+        ?: nested?.optionalString("packLabel", "pack_label")
+    val packType = base.packType?.trim()?.takeIf { it.isNotBlank() }
+        ?: obj.optionalString("packType", "pack_type")
+        ?: nested?.optionalString("packType", "pack_type")
+    val hierarchyLevel = base.hierarchyLevel
+        ?: obj.optionalInt("hierarchyLevel", "hierarchy_level")
+        ?: nested?.optionalInt("hierarchyLevel", "hierarchy_level")
+    val parentPackId = base.parentPackId?.trim()?.takeIf { it.isNotBlank() }
+        ?: obj.optionalString("parentPackId", "parent_pack_id", "parentBoxId", "parent_box_id")
+        ?: nested?.optionalString("parentPackId", "parent_pack_id", "parentBoxId", "parent_box_id")
+        ?: obj.optionalInt("parentBoxId", "parent_box_id")?.toString()
+        ?: nested?.optionalInt("parentBoxId", "parent_box_id")?.toString()
+    val sscc = base.sscc?.trim()?.takeIf { it.isNotBlank() }
+        ?: obj.optionalString("sscc")
+        ?: nested?.optionalString("sscc")
+    val barcodeType = base.barcodeType?.trim()?.takeIf { it.isNotBlank() }
+        ?: obj.optionalString("barcodeType", "barcode_type")
+        ?: nested?.optionalString("barcodeType", "barcode_type")
+    val barcodeData = base.barcodeData?.trim()?.takeIf { it.isNotBlank() }
+        ?: obj.optionalString("barcodeData", "barcode_data", "barcode")
+        ?: nested?.optionalString("barcodeData", "barcode_data", "barcode", "boxBarcode")
+    val barcodeImageUrl = base.barcodeImageUrl?.trim()?.takeIf { it.isNotBlank() }
+        ?: obj.optionalString("barcodeImageUrl", "barcode_image_url")
+        ?: nested?.optionalString("barcodeImageUrl", "barcode_image_url")
+    val status = base.status?.trim()?.takeIf { it.isNotBlank() }
+        ?: obj.optionalString("status")
+        ?: nested?.optionalString("status")
+    val packageStatus = base.packageStatus?.trim()?.takeIf { it.isNotBlank() }
+        ?: obj.optionalString("packageStatus", "package_status")
+        ?: nested?.optionalString("packageStatus", "package_status")
+    val itemCount = base.itemCount
+        ?: obj.optionalInt("itemCount", "item_count")
+        ?: nested?.optionalInt("itemCount", "item_count")
+    val totalPackedQty = base.totalPackedQty
+        ?: obj.optionalInt("totalPackedQty", "total_packed_qty")
+        ?: nested?.optionalInt("totalPackedQty", "total_packed_qty")
+    val items = base.items?.takeIf { it.isNotEmpty() }
+        ?: obj.pickArray("items").mapNotNull {
+            runCatching { wmsJson.decodeFromJsonElement(WmsPackingBoxItem.serializer(), it) }.getOrNull()
+        }.takeIf { it.isNotEmpty() }
+        ?: nested?.pickArray("items")?.mapNotNull {
+            runCatching { wmsJson.decodeFromJsonElement(WmsPackingBoxItem.serializer(), it) }.getOrNull()
+        }?.takeIf { it.isNotEmpty() }
+
+    return base.copy(
+        packId = resolvedPackId,
+        packLabel = packLabel,
+        packType = packType,
+        hierarchyLevel = hierarchyLevel,
+        parentPackId = parentPackId,
+        sscc = sscc,
+        barcodeType = barcodeType,
+        barcodeData = barcodeData,
+        barcodeImageUrl = barcodeImageUrl,
+        status = status,
+        packageStatus = packageStatus,
+        itemCount = itemCount,
+        totalPackedQty = totalPackedQty,
+        items = items ?: base.items,
+    )
 }
 
 /** Matches iOS `decodePackingBoxResponse(from:)` envelope + nested `box` handling. */
 internal fun decodePackingBox(raw: String): WmsCreatedPackingBox {
     val element = wmsJson.parseToJsonElement(raw)
     decodePackingBoxElement(element)?.let { return it }
+    val obj = element as? JsonObject
+    if (obj != null) {
+        val decoded = runCatching {
+            wmsJson.decodeFromJsonElement(WmsCreatedPackingBox.serializer(), element)
+        }.getOrNull()
+        if (decoded != null) return normalizeCreatedPackingBox(obj, decoded)
+    }
     return wmsJson.decodeFromString(WmsCreatedPackingBox.serializer(), raw)
+}
+
+private fun resolvePackIdFromJson(obj: JsonObject): String? {
+    obj.optionalString("packId", "pack_id", "boxId", "box_id", "id")?.let { return it }
+    obj.optionalInt("id", "boxId", "box_id", "packId", "pack_id")?.let { return it.toString() }
+    return null
+}
+
+private fun normalizeCreatedPackingBox(
+    obj: JsonObject,
+    decoded: WmsCreatedPackingBox,
+): WmsCreatedPackingBox {
+    val nestedElement = obj["box"]?.jsonObject
+    val nestedDecoded = nestedElement?.let {
+        runCatching { wmsJson.decodeFromJsonElement(WmsPackingBoxNested.serializer(), it) }.getOrNull()
+    }
+    val nestedPackId = nestedElement?.let { resolvePackIdFromJson(it) } ?: nestedDecoded?.packId
+    val nested = nestedDecoded?.copy(packId = nestedPackId ?: nestedDecoded.packId)
+
+    val resolvedPackId = resolvePackIdFromJson(obj)?.takeIf { it.isNotBlank() }
+        ?: decoded.packId?.trim()?.takeIf { it.isNotBlank() }
+        ?: nestedPackId?.trim()?.takeIf { it.isNotBlank() }
+
+    return decoded.copy(
+        packId = resolvedPackId,
+        packLabel = decoded.packLabel?.takeIf { it.isNotBlank() } ?: nested?.packLabel,
+        packType = decoded.packType?.takeIf { it.isNotBlank() } ?: nested?.packType,
+        hierarchyLevel = decoded.hierarchyLevel ?: nested?.hierarchyLevel,
+        sscc = decoded.sscc?.takeIf { it.isNotBlank() } ?: nested?.sscc,
+        barcodeType = decoded.barcodeType?.takeIf { it.isNotBlank() } ?: nested?.barcodeType,
+        barcodeData = decoded.barcodeData?.takeIf { it.isNotBlank() } ?: nested?.barcodeData,
+        barcodeImageUrl = decoded.barcodeImageUrl?.takeIf { it.isNotBlank() } ?: nested?.barcodeImageUrl,
+        itemCount = decoded.itemCount ?: nested?.itemCount,
+        totalPackedQty = decoded.totalPackedQty ?: nested?.totalPackedQty,
+        status = decoded.status?.takeIf { it.isNotBlank() } ?: nested?.status,
+        items = decoded.items?.takeIf { it.isNotEmpty() } ?: nested?.items,
+        box = nested ?: decoded.box,
+    )
 }
 
 private fun decodePackingBoxElement(element: JsonElement): WmsCreatedPackingBox? {
@@ -952,27 +2376,7 @@ private fun decodePackingBoxElement(element: JsonElement): WmsCreatedPackingBox?
             wmsJson.decodeFromJsonElement(WmsCreatedPackingBox.serializer(), element)
         }.getOrNull() ?: return null
 
-        if (decoded.resolvedPackId.isNotBlank()) return decoded
-
-        val nested = element["box"]?.let {
-            runCatching { wmsJson.decodeFromJsonElement(WmsPackingBoxNested.serializer(), it) }.getOrNull()
-        } ?: return decoded
-
-        return decoded.copy(
-            packId = nested.packId ?: decoded.packId,
-            packLabel = decoded.packLabel ?: nested.packLabel,
-            packType = decoded.packType ?: nested.packType,
-            hierarchyLevel = decoded.hierarchyLevel ?: nested.hierarchyLevel,
-            sscc = decoded.sscc ?: nested.sscc,
-            barcodeType = decoded.barcodeType ?: nested.barcodeType,
-            barcodeData = decoded.barcodeData ?: nested.barcodeData,
-            barcodeImageUrl = decoded.barcodeImageUrl ?: nested.barcodeImageUrl,
-            itemCount = decoded.itemCount ?: nested.itemCount,
-            totalPackedQty = decoded.totalPackedQty ?: nested.totalPackedQty,
-            status = decoded.status ?: nested.status,
-            items = decoded.items?.takeIf { it.isNotEmpty() } ?: nested.items,
-            box = nested,
-        )
+        return normalizeCreatedPackingBox(element, decoded)
     }
 
     return runCatching {
@@ -1092,12 +2496,14 @@ private fun decodePickListLine(element: JsonElement): WmsPickListLine? {
 
     return WmsPickListLine(
         pickLineId = lineId,
+        taskId = obj.optionalString("taskId", "task_id"),
         id = obj.optionalString("id", "taskId"),
         orderNumber = obj.optionalString("orderNumber", "order_number", "sourceOrderRef")
             ?: orderObj?.optionalString("orderNumber", "order_number"),
         lineNumber = obj.optionalInt("lineNumber", "line_number", "sequence", "sequenceNumber")
             ?: orderLineObj?.optionalInt("lineNumber", "line_number"),
-        productId = obj.optionalString("productId", "product_id"),
+        productId = obj.optionalString("productId", "product_id")
+            ?: obj.optionalInt("productId", "product_id")?.toString(),
         productName = productName,
         productSku = productSku,
         requestedQty = obj.optionalQtyString(
@@ -1109,6 +2515,8 @@ private fun decodePickListLine(element: JsonElement): WmsPickListLine? {
             "required_qty",
         ),
         pickedQty = obj.optionalQtyString("pickedQty", "picked_qty"),
+        quantity = obj.optionalInt("quantity", "qty"),
+        packedQty = obj.optionalInt("packedQty", "packed_qty"),
         remainingQty = obj.optionalInt("remainingQty", "remaining_qty"),
         status = obj.optionalString("status"),
         locationCode = obj.optionalString("locationCode", "location_code")
@@ -1117,12 +2525,38 @@ private fun decodePickListLine(element: JsonElement): WmsPickListLine? {
             ?: location?.optionalString("locationName", "location_name"),
         zone = obj.optionalString("zone") ?: location?.optionalString("zone"),
         bin = obj.optionalString("bin") ?: location?.optionalString("bin"),
+        batch = obj.optionalString("batch"),
+        batchNumber = obj.optionalString("batchNumber", "batch_number"),
+        expiryDate = obj.optionalString("expiryDate", "expiry_date", "expirationDate", "expiration_date")
+            ?: product?.let { null },
         pickInstruction = obj.optionalString("pickInstruction", "pick_instruction", "instruction"),
         sourceLocationId = obj.optionalString("sourceLocationId", "source_location_id")
             ?: location?.optionalString("locationId", "id"),
+        exceptionTypes = obj.decodeStringList("exceptionTypes", "exception_types"),
+        exceptionNotes = obj.optionalString("exceptionNotes", "exception_notes", "notes"),
         product = product,
+        gtinFromTask = obj.optionalString("gtin", "scannedGtin", "scanned_gtin"),
     )
 }
+
+private fun JsonObject.decodeStringList(vararg keys: String): List<String> {
+    for (key in keys) {
+        val array = this[key] as? JsonArray ?: continue
+        return array.mapNotNull { it.jsonPrimitive.contentOrNull?.trim()?.takeIf { s -> s.isNotEmpty() } }
+    }
+    return emptyList()
+}
+
+fun formatPackingExceptionType(raw: String): String =
+    when (raw.trim().uppercase()) {
+        "SHORTAGE" -> "Shortage"
+        "DAMAGED" -> "Damaged"
+        "BIN_EMPTY" -> "Bin empty"
+        "WRONG_BATCH" -> "Wrong batch"
+        "NOT_FOUND" -> "Not found"
+        "OTHER" -> "Other"
+        else -> raw.trim().replace('_', ' ').replaceFirstChar { it.uppercase() }
+    }
 
 internal fun decodePickListLinesPayload(raw: String): WmsPickListLinesPayload {
     val element = wmsJson.parseToJsonElement(raw)
@@ -1188,15 +2622,57 @@ private fun JsonObject.optionalNestedObject(vararg keys: String): JsonObject? {
     return null
 }
 
+private fun JsonObject.resolvePickListNumericId(fallback: Int? = null): Int? {
+    fallback?.takeIf { it > 0 }?.let { return it }
+    optionalInt("id", "listId", "list_id", "pickListId", "pick_list_id")?.takeIf { it > 0 }?.let { return it }
+    for (key in listOf("id", "listId", "list_id", "pickListId", "pick_list_id")) {
+        val raw = optionalString(key)?.trim().orEmpty()
+        if (raw.isNotEmpty() && raw.all { it.isDigit() }) {
+            raw.toIntOrNull()?.takeIf { it > 0 }?.let { return it }
+        }
+    }
+    return null
+}
+
 private fun decodePickListItem(element: JsonElement): WmsPickListItem? {
+    val obj = element.jsonObject
     val base = runCatching { wmsJson.decodeFromJsonElement(WmsPickListItem.serializer(), element) }.getOrNull()
         ?: return null
-    if (base.resolvedLines.isNotEmpty()) return base
-    val obj = element.jsonObject
     val sidecar = obj.pickArray("lines", "pickLines", "tasks", "pickTasks")
-    if (sidecar.isEmpty()) return base
-    val lines = sidecar.mapNotNull(::decodePickListLine)
-    return base.copy(lines = lines)
+    val manualLines = sidecar.mapNotNull(::decodePickListLine)
+    val lines = manualLines.takeIf { it.isNotEmpty() } ?: base.resolvedLines
+    val boxesArray = obj.pickArray("boxes")
+    val boxes = if (boxesArray.isNotEmpty()) {
+        boxesArray.mapNotNull { decodePackingBoxSummary(it) }
+    } else {
+        base.boxes
+    }
+    val fromTasks = obj["tasks"] != null || obj["pickTasks"] != null
+    val merged = when {
+        manualLines.isEmpty() && boxes == base.boxes -> base
+        fromTasks -> base.copy(tasks = lines, boxes = boxes)
+        else -> base.copy(lines = lines, boxes = boxes)
+    }
+    val numericId = obj.resolvePickListNumericId(merged.numericId)
+    val withNumeric = if (numericId != null && numericId != merged.numericId) {
+        merged.copy(numericId = numericId)
+    } else {
+        merged
+    }
+    return withNumeric.copy(
+        displayPackingStatus = withNumeric.displayPackingStatus
+            ?: obj.optionalString("displayPackingStatus", "display_packing_status"),
+        openBoxCount = withNumeric.openBoxCount ?: obj.optionalInt("openBoxCount", "open_box_count"),
+        canComplete = withNumeric.canComplete ?: obj["canComplete"]?.jsonPrimitive?.let {
+            when (it.content) {
+                "true" -> true
+                "false" -> false
+                else -> null
+            }
+        },
+        boxCount = withNumeric.boxCount ?: obj.optionalInt("boxCount", "box_count"),
+        completedBoxCount = withNumeric.completedBoxCount ?: obj.optionalInt("completedBoxCount", "completed_box_count", "sealedBoxCount", "sealed_box_count"),
+    )
 }
 
 private fun decodePackingPickListItem(element: JsonElement): WmsPackingPickListItem? =
@@ -1215,18 +2691,58 @@ fun packingBoxTypeConfig(uiLabel: String): Pair<String, Int> =
         else -> "CARTON" to 2
     }
 
+internal fun decodeIndustryPickListActionResponse(raw: String): WmsIndustryPickListActionResponse {
+    val element = wmsJson.parseToJsonElement(raw)
+    val obj = when (element) {
+        is JsonObject -> when {
+            element["data"] is JsonObject -> element["data"]!!.jsonObject
+            element["pickList"] is JsonObject -> element["pickList"]!!.jsonObject
+            else -> element
+        }
+        else -> return WmsIndustryPickListActionResponse()
+    }
+    val decoded = runCatching {
+        wmsJson.decodeFromJsonElement(WmsIndustryPickListActionResponse.serializer(), obj)
+    }.getOrNull() ?: WmsIndustryPickListActionResponse()
+    return decoded.copy(
+        toteId = decoded.resolvedToteId ?: resolveIndustryToteIdFromJson(obj),
+        activeToteId = decoded.activeToteId ?: resolveIndustryToteIdFromJson(obj),
+    )
+}
+
+private fun resolveIndustryToteIdFromJson(obj: JsonObject): Int? {
+    for (key in listOf("toteId", "activeToteId")) {
+        obj[key]?.jsonPrimitive?.intOrNull?.takeIf { it > 0 }?.let { return it }
+    }
+    obj["tote"]?.jsonObject?.let { tote ->
+        (tote["toteId"] ?: tote["id"])?.jsonPrimitive?.intOrNull?.takeIf { it > 0 }?.let { return it }
+    }
+    obj["totes"]?.jsonArray?.forEach { entry ->
+        val tote = entry.jsonObject
+        val status = tote["status"]?.jsonPrimitive?.content.orEmpty().lowercase()
+        if (status == "active") {
+            (tote["toteId"] ?: tote["id"])?.jsonPrimitive?.intOrNull?.takeIf { it > 0 }?.let { return it }
+        }
+    }
+    return null
+}
+
 fun mapPickListToTask(item: WmsPickListItem): PickerMyListTask {
     val status = (item.status ?: "PENDING").uppercase()
-    val lines = item.lineCount ?: item.resolvedLines.size
-    val total = item.totalRequestedQty ?: lines
-    val picked = item.totalPickedQty ?: 0
+    val summary = item.summary
+    val lines = item.lineCount ?: summary?.totalTasks ?: item.resolvedLines.size
+    val total = item.totalRequestedQty ?: summary?.batchCount ?: lines
+    val picked = item.totalPickedQty ?: summary?.picked ?: 0
+    val skuCount = summary?.skuCount ?: 0
+    val batchCount = summary?.batchCount ?: 0
+    val pickedSkuCount = summary?.pickedSkuCount ?: 0
     val locationParts = buildList {
-        item.zoneCode?.takeIf { it.isNotBlank() }?.let { add("Zone $it") }
-        item.orderNumber?.takeIf { it.isNotBlank() }?.let { add("Order $it") }
+        item.resolvedZoneCode?.takeIf { it.isNotBlank() }?.let { add(it) }
+        item.stagingLocationName?.takeIf { it.isNotBlank() }?.let { add(it) }
     }
     return PickerMyListTask(
         id = item.id,
-        pickListId = item.pickListId ?: item.id,
+        pickListId = item.numericId?.toString() ?: item.pickListId ?: item.id,
         title = item.displayTitle,
         lineCount = lines,
         itemCount = total,
@@ -1234,11 +2750,76 @@ fun mapPickListToTask(item: WmsPickListItem): PickerMyListTask {
         status = status,
         pickType = item.pickType,
         waveLabel = item.waveDisplayLabel,
-        zone = item.zoneCode,
+        zone = item.resolvedZoneCode,
         toteNumber = item.toteNumber?.takeIf { it.isNotBlank() },
         locationLine = locationParts.joinToString(" • ").ifBlank { "Warehouse floor" },
-        isLocked = status == "PENDING" && item.assignedPicker == null,
-        lockReason = if (status == "PENDING") "Wait for assignment" else null,
-        priority = item.priority ?: 5,
+        isLocked = status == "CREATED" && item.assignedPickerId == null && item.assignedPicker == null,
+        lockReason = if (status == "CREATED") "Wait for assignment" else null,
+        priority = when (item.priority?.uppercase()) {
+            "URGENT", "HIGH" -> 1
+            "NORMAL" -> 5
+            "LOW" -> 9
+            else -> 5
+        },
+        packingStatus = item.packingStatus,
+        pickListCode = item.pickListCode,
+        stagingLocationName = item.stagingLocationName,
+        skuCount = skuCount,
+        batchCount = batchCount,
+        pickedSkuCount = pickedSkuCount,
+        dispatchStatus = item.dispatchStatus,
+        assignedPickerName = item.assignedPickerName?.takeIf { it.isNotBlank() }
+            ?: item.packer?.displayName?.takeIf { it.isNotBlank() },
+        resolvedLines = item.resolvedLines,
+        completedAt = item.completedAt?.takeIf { it.isNotBlank() }
+            ?: item.completedAtSnake?.takeIf { it.isNotBlank() },
+        stagedAt = item.stagedAt?.takeIf { it.isNotBlank() },
+        updatedAt = item.updatedAt?.takeIf { it.isNotBlank() },
     )
+}
+
+// ── Warehouse locations (staging picker) ─────────────────────────────────────
+
+data class WmsWarehouseLocation(
+    val locationId: String,
+    val locationCode: String? = null,
+    val locationName: String? = null,
+    val locationType: String? = null,
+) {
+    val displayLabel: String
+        get() {
+            val name = locationName?.trim().orEmpty()
+            val code = locationCode?.trim().orEmpty()
+            return when {
+                name.isNotEmpty() && code.isNotEmpty() -> "$name · $code"
+                name.isNotEmpty() -> name
+                code.isNotEmpty() -> code
+                else -> locationId
+            }
+        }
+}
+
+fun List<WmsWarehouseLocation>.stagingLocationCandidates(): List<WmsWarehouseLocation> {
+    val stagingType = filter { (it.locationType ?: "").uppercase().contains("STAG") }
+    val source = stagingType.ifEmpty { this }
+    return source
+        .filter { it.locationId.trim().isNotEmpty() }
+        .distinctBy { it.locationId.trim() }
+        .sortedBy { it.displayLabel.uppercase() }
+}
+
+internal fun decodeStagingLocations(raw: String): List<WmsWarehouseLocation> {
+    val root = runCatching { wmsJson.parseToJsonElement(raw).jsonObject }.getOrNull() ?: return emptyList()
+    val payload = root["data"]?.jsonObject ?: root
+    val locationsArray = payload["locations"] as? JsonArray ?: return emptyList()
+    return locationsArray.mapNotNull { element ->
+        val obj = element as? JsonObject ?: return@mapNotNull null
+        val locationId = obj.optionalString("locationId", "location_id", "id") ?: return@mapNotNull null
+        WmsWarehouseLocation(
+            locationId = locationId,
+            locationCode = obj.optionalString("locationCode", "location_code", "code"),
+            locationName = obj.optionalString("locationName", "location_name", "name"),
+            locationType = obj.optionalString("locationType", "location_type", "type"),
+        )
+    }
 }

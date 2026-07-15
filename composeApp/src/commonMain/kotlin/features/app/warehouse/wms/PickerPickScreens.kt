@@ -13,6 +13,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -30,11 +31,14 @@ import androidx.compose.material.icons.filled.Keyboard
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material.icons.filled.RemoveCircle
 import androidx.compose.material.icons.filled.AddCircle
+import androidx.activity.compose.BackHandler
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.OutlinedButton
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Text
@@ -67,11 +71,12 @@ import core.network.wms.WmsPatchPickListLineUpdate
 import core.network.wms.WmsPatchPickListLinesRequest
 import core.network.wms.WmsPickListLine
 import core.network.wms.WmsPickListLinesPayload
-import core.network.wms.WmsStagePickListRequest
+import core.network.wms.WmsWarehouseLocation
 import core.storage.SessionManager
 import core.storage.getLocalStorage
 import features.app.warehouse.WarehouseMlKitScanner
 import features.app.warehouse.batchMatchesScan
+import features.app.warehouse.gtinMatchesScan
 import features.app.warehouse.productMatchesScan
 import kotlinx.coroutines.launch
 
@@ -131,13 +136,14 @@ object PickSessionSupport {
         pickLineId: String,
         qty: Int,
         lines: List<PickSessionLineUi>,
+        markComplete: Boolean = false,
     ): List<PickSessionLineUi> {
         val index = lines.indexOfFirst { it.id == pickLineId }
         if (index < 0) return lines
         val updated = lines.toMutableList()
         val required = updated[index].requiredCount
         val picked = qty.coerceIn(0, required)
-        val isComplete = picked >= required
+        val isComplete = picked >= required || markComplete
         val wms = updated[index].wms
         updated[index] = updated[index].copy(
             pickedCount = picked,
@@ -201,6 +207,14 @@ fun PickerPickingFlow(
         if (total > 0) {
             val completed = updated.count { it.state == PickLineUiState.Completed }
             wavePctComplete = ((completed.toFloat() / total) * 100).toInt()
+        }
+    }
+
+    BackHandler {
+        if (scanLineId != null) {
+            scanLineId = null
+        } else {
+            onBack()
         }
     }
 
@@ -269,6 +283,12 @@ private fun PickerStartPickingScreen(
     var loading by remember { mutableStateOf(true) }
     var refreshing by remember { mutableStateOf(false) }
     var loadError by remember { mutableStateOf<String?>(null) }
+    var showLoadErrorPopup by remember { mutableStateOf(false) }
+
+    fun showLoadError(message: String) {
+        loadError = message
+        showLoadErrorPopup = true
+    }
 
     fun applyPayload(payload: WmsPickListLinesPayload) {
         val built = PickSessionSupport.buildSessionLines(payload.pickLines)
@@ -287,7 +307,7 @@ private fun PickerStartPickingScreen(
             }
             loadError = null
             if (companyId <= 0) {
-                loadError = "Company is not set."
+                showLoadError("Company is not set.")
                 loading = false
                 refreshing = false
                 return@launch
@@ -297,7 +317,7 @@ private fun PickerStartPickingScreen(
             }.onSuccess { payload ->
                 applyPayload(payload)
             }.onFailure {
-                loadError = it.message ?: "Failed to load line items."
+                showLoadError(it.message ?: "Failed to load line items.")
             }
             loading = false
             refreshing = false
@@ -362,7 +382,12 @@ private fun PickerStartPickingScreen(
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center,
                 ) {
-                    Text(loadError!!, color = WmsColors.TextSecondary, fontSize = 14.sp)
+                    Text(
+                        "Could not load line items",
+                        fontSize = 16.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = WmsColors.TextPrimary,
+                    )
                     Spacer(Modifier.height(12.dp))
                     Text(
                         "Retry",
@@ -401,7 +426,10 @@ private fun PickerStartPickingScreen(
                                     showScanButton = !isFullyPicked,
                                     onScan = { onScanLine(line.id) },
                                 )
-                                PickLineUiState.Pending -> PickerPendingLineCard(line)
+                                PickLineUiState.Pending -> PickerPendingLineCard(
+                                    line = line,
+                                    onScan = { onScanLine(line.id) },
+                                )
                             }
                         }
                     }
@@ -410,6 +438,15 @@ private fun PickerStartPickingScreen(
             }
         }
         }
+        WmsRichErrorSheet(
+            visible = showLoadErrorPopup,
+            title = "Could not load line items",
+            message = loadError.orEmpty(),
+            onDismiss = {
+                showLoadErrorPopup = false
+                loadSession()
+            },
+        )
     }
 }
 
@@ -632,19 +669,38 @@ private fun PickerActiveLineCard(
 }
 
 @Composable
-private fun PickerPendingLineCard(line: PickSessionLineUi) {
-    val pending = maxOf(line.requiredCount - line.pickedCount, line.requiredCount)
+private fun PickerPendingLineCard(
+    line: PickSessionLineUi,
+    onScan: () -> Unit,
+) {
+    val pending = maxOf(line.requiredCount - line.pickedCount, 0)
     PickerLineCardShell(
         accentColor = WmsColors.Border,
         backgroundColor = Color.White.copy(alpha = 0.85f),
     ) {
-        PickerLocationBadge(line.locationLabel, Color(0xFFF3F4F6), WmsColors.TextMuted)
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+            PickerLocationBadge(line.locationLabel, Color(0xFFF3F4F6), WmsColors.TextMuted)
+            Text(
+                "$pending Pending",
+                fontSize = 12.sp,
+                fontWeight = FontWeight.Bold,
+                color = WmsColors.TextMuted,
+            )
+        }
         Spacer(Modifier.height(8.dp))
-        Text(line.productName, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = WmsColors.TextMuted, maxLines = 2)
-        Text("SKU: ${line.sku}", fontSize = 13.sp, color = Color(0xFFD1D5DB), maxLines = 1)
-        Text("Qty: ${line.requiredCount}", fontSize = 13.sp, color = WmsColors.TextMuted)
+        Text(line.productName, fontSize = 16.sp, fontWeight = FontWeight.Bold, color = WmsColors.TextPrimary, maxLines = 2)
+        Text("SKU: ${line.sku}", fontSize = 13.sp, color = WmsColors.TextSecondary, maxLines = 1)
         Spacer(Modifier.weight(1f))
-        Text("$pending Pending", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = WmsColors.TextMuted)
+        Button(
+            onClick = onScan,
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(10.dp),
+            colors = ButtonDefaults.buttonColors(containerColor = WmsColors.Navy),
+        ) {
+            Icon(Icons.Default.QrCodeScanner, null, tint = Color.White, modifier = Modifier.size(16.dp))
+            Spacer(Modifier.width(8.dp))
+            Text("Scan item", fontWeight = FontWeight.Bold, fontSize = 15.sp)
+        }
     }
 }
 
@@ -679,7 +735,9 @@ private fun PickerBoxScanScreen(
         return
     }
 
-    fun confirmLine(pickLineId: String, qty: Int) {
+    BackHandler(onBack = onBack)
+
+    fun confirmLine(pickLineId: String, qty: Int, forceComplete: Boolean = false) {
         if (isSaving) return
         scope.launch {
             isSaving = true
@@ -692,7 +750,7 @@ private fun PickerBoxScanScreen(
             val sessionLine = sessionLines[index]
             val required = sessionLine.requiredCount
             val newPicked = qty.coerceIn(0, required)
-            val isComplete = newPicked >= required
+            val isComplete = newPicked >= required || forceComplete
             if (companyId <= 0) {
                 saveError = "Company is not set."
                 isSaving = false
@@ -713,7 +771,12 @@ private fun PickerBoxScanScreen(
                         ),
                     ),
                 )
-                val updated = PickSessionSupport.applyPickedQty(pickLineId, newPicked, sessionLines)
+                val updated = PickSessionSupport.applyPickedQty(
+                    pickLineId,
+                    newPicked,
+                    sessionLines,
+                    markComplete = forceComplete && newPicked < required,
+                )
                 onSessionLinesChange(updated)
                 if (PickSessionSupport.allLinesComplete(updated)) {
                     onAllLinesComplete()
@@ -762,17 +825,29 @@ private fun PickerBoxScanScreen(
                 sku = line.sku,
                 gtin = line.wms.scanGtin,
                 batch = line.wms.scanBatchNumber,
-                required = line.requiredCount,
+                pickedQty = line.pickedCount,
+                required = maxOf(0, line.requiredCount - line.pickedCount),
+                totalRequired = line.requiredCount,
             )
             PickerScanContent(
                 line = line,
                 isSaving = isSaving,
-                onConfirmPick = ::confirmLine,
+                onConfirmPick = { pickLineId, qty, forceComplete ->
+                    confirmLine(pickLineId, qty, forceComplete)
+                },
             )
-            saveError?.let {
-                Text(it, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = Color(0xFF991B1B))
-            }
         }
+    }
+
+    saveError?.let { message ->
+        AlertDialog(
+            onDismissRequest = { saveError = null },
+            title = { Text("Could not save pick") },
+            text = { Text(message) },
+            confirmButton = {
+                TextButton(onClick = { saveError = null }) { Text("OK") }
+            },
+        )
     }
 }
 
@@ -919,6 +994,8 @@ private fun PickerScanProductCard(
     gtin: String,
     batch: String,
     required: Int,
+    pickedQty: Int = 0,
+    totalRequired: Int = required,
 ) {
     Column(
         modifier = Modifier
@@ -940,6 +1017,13 @@ private fun PickerScanProductCard(
         Text("SKU: $sku", fontSize = 13.sp, color = Color(0xFF4B5563))
         Text("GTIN: ${gtin.ifBlank { "—" }}", fontSize = 13.sp, color = Color(0xFF4B5563))
         Text("Batch: ${batch.ifBlank { "—" }}", fontSize = 13.sp, color = Color(0xFF4B5563))
+        if (pickedQty > 0) {
+            Text(
+                "Picked: $pickedQty / $totalRequired",
+                fontSize = 13.sp,
+                color = WmsColors.ActiveBlue,
+            )
+        }
         Text("Required: $required", fontSize = 13.sp, color = Color(0xFF4B5563))
     }
 }
@@ -948,7 +1032,7 @@ private fun PickerScanProductCard(
 private fun PickerScanContent(
     line: PickSessionLineUi,
     isSaving: Boolean,
-    onConfirmPick: (String, Int) -> Unit,
+    onConfirmPick: (String, Int, Boolean) -> Unit,
 ) {
     val gtin = line.wms.scanGtin
     val batch = line.wms.scanBatchNumber
@@ -956,39 +1040,67 @@ private fun PickerScanContent(
     var isScanning by remember(line.id) { mutableStateOf(true) }
     var productVerified by remember(line.id) { mutableStateOf(false) }
     var pickedQty by remember(line.id) { mutableIntStateOf(line.pickedCount.coerceIn(0, line.requiredCount)) }
-    var qtyInput by remember(line.id) {
-        mutableStateOf("1")
+    var pendingQty by remember(line.id) {
+        val remaining = maxOf(0, line.requiredCount - line.pickedCount.coerceIn(0, line.requiredCount))
+        mutableIntStateOf(if (remaining > 0) remaining else 1)
     }
     var showManualBatch by remember(line.id) { mutableStateOf(false) }
     var manualBatch by remember(line.id) { mutableStateOf("") }
     var scanError by remember(line.id) { mutableStateOf<String?>(null) }
+    var partialCompleteQty by remember(line.id) { mutableStateOf<Int?>(null) }
 
     val remainingQty = maxOf(0, line.requiredCount - pickedQty)
-    val resolvedPendingQty = run {
-        val parsed = qtyInput.filter { it.isDigit() }.toIntOrNull() ?: 0
-        if (remainingQty <= 0) 0 else minOf(remainingQty, maxOf(1, parsed))
+    val resolvedPendingQty = if (remainingQty <= 0) {
+        0
+    } else {
+        minOf(remainingQty, maxOf(1, pendingQty))
+    }
+
+    fun decreasePendingQty() {
+        if (remainingQty <= 0) return
+        pendingQty = maxOf(1, minOf(remainingQty, pendingQty) - 1)
+    }
+
+    fun increasePendingQty() {
+        if (remainingQty <= 0) return
+        pendingQty = minOf(remainingQty, maxOf(1, pendingQty) + 1)
     }
 
     fun markVerified() {
         scanError = null
         productVerified = true
         isScanning = false
-        qtyInput = "1"
+        pendingQty = if (remainingQty > 0) remainingQty else 1
     }
 
     fun handleBarcodeScan(code: String) {
         val trimmed = code.trim()
         if (trimmed.isEmpty() || productVerified) return
-        if (gtin.isBlank() || batch.isBlank()) {
-            scanError = "GTIN or batch missing on this line."
-            isScanning = true
-            return
-        }
-        if (!productMatchesScan(trimmed, gtin, batch)) {
-            scanError = "GTIN or batch does not match this product."
-            scannedCode = ""
-            isScanning = true
-            return
+        when {
+            batch.isBlank() && gtin.isBlank() -> {
+                scanError = "GTIN or batch missing on this line."
+                isScanning = true
+                return
+            }
+            gtin.isNotBlank() -> {
+                if (!productMatchesScan(trimmed, gtin, batch)) {
+                    scanError = if (batch.isBlank()) {
+                        "GTIN does not match this product."
+                    } else {
+                        "GTIN or batch does not match this product."
+                    }
+                    scannedCode = ""
+                    isScanning = true
+                    return
+                }
+            }
+            else -> {
+                if (!batchMatchesScan(trimmed, batch)) {
+                    scanError = "Batch does not match."
+                    isScanning = true
+                    return
+                }
+            }
         }
         markVerified()
     }
@@ -996,13 +1108,23 @@ private fun PickerScanContent(
     fun submitManualBatch() {
         val trimmed = manualBatch.trim()
         if (trimmed.isEmpty()) return
-        if (batch.isBlank()) {
-            scanError = "Batch missing on this line."
-            return
-        }
-        if (!batchMatchesScan(trimmed, batch)) {
-            scanError = "Batch does not match."
-            return
+        when {
+            batch.isBlank() -> {
+                if (gtin.isBlank()) {
+                    scanError = "GTIN or batch missing on this line."
+                    return
+                }
+                if (!gtinMatchesScan(trimmed, gtin)) {
+                    scanError = "GTIN does not match this product."
+                    return
+                }
+            }
+            else -> {
+                if (!batchMatchesScan(trimmed, batch)) {
+                    scanError = "Batch does not match."
+                    return
+                }
+            }
         }
         showManualBatch = false
         manualBatch = ""
@@ -1103,22 +1225,31 @@ private fun PickerScanContent(
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(16.dp),
             ) {
-                Icon(
-                    Icons.Default.RemoveCircle,
-                    null,
-                    tint = WmsColors.Navy,
+                Box(
                     modifier = Modifier
-                        .size(32.dp)
-                        .clickable(enabled = resolvedPendingQty > 1 && remainingQty > 0) {
-                            val next = maxOf(1, resolvedPendingQty - 1)
-                            qtyInput = next.toString()
-                        },
-                )
+                        .size(48.dp)
+                        .wmsRepeatClickable(
+                            enabled = resolvedPendingQty > 1 && remainingQty > 0,
+                            onClick = { decreasePendingQty() },
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Default.RemoveCircle,
+                        contentDescription = "Decrease quantity",
+                        tint = WmsColors.Navy,
+                        modifier = Modifier.size(32.dp),
+                    )
+                }
                 OutlinedTextField(
-                    value = qtyInput,
+                    value = if (remainingQty <= 0) "0" else resolvedPendingQty.toString(),
                     onValueChange = { raw ->
-                        val digits = raw.filter { it.isDigit() }
-                        qtyInput = digits
+                        val parsed = raw.filter { it.isDigit() }.toIntOrNull()
+                        pendingQty = when {
+                            remainingQty <= 0 -> 1
+                            parsed == null || parsed <= 0 -> 1
+                            else -> minOf(remainingQty, parsed)
+                        }
                     },
                     modifier = Modifier.weight(1f),
                     singleLine = true,
@@ -1134,17 +1265,22 @@ private fun PickerScanContent(
                     ),
                     shape = RoundedCornerShape(10.dp),
                 )
-                Icon(
-                    Icons.Default.AddCircle,
-                    null,
-                    tint = WmsColors.Navy,
+                Box(
                     modifier = Modifier
-                        .size(32.dp)
-                        .clickable(enabled = resolvedPendingQty < remainingQty && remainingQty > 0) {
-                            val next = minOf(remainingQty, resolvedPendingQty + 1)
-                            qtyInput = next.toString()
-                        },
-                )
+                        .size(48.dp)
+                        .wmsRepeatClickable(
+                            enabled = resolvedPendingQty < remainingQty && remainingQty > 0,
+                            onClick = { increasePendingQty() },
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        Icons.Default.AddCircle,
+                        contentDescription = "Increase quantity",
+                        tint = WmsColors.Navy,
+                        modifier = Modifier.size(32.dp),
+                    )
+                }
             }
             Text("Remaining: $remainingQty", fontSize = 13.sp, fontWeight = FontWeight.Medium, color = WmsColors.TextSecondary)
         }
@@ -1153,7 +1289,12 @@ private fun PickerScanContent(
             onClick = {
                 val add = resolvedPendingQty
                 if (add > 0) {
-                    onConfirmPick(line.id, minOf(line.requiredCount, pickedQty + add))
+                    val newTotal = minOf(line.requiredCount, pickedQty + add)
+                    if (newTotal < line.requiredCount) {
+                        partialCompleteQty = newTotal
+                    } else {
+                        onConfirmPick(line.id, newTotal, false)
+                    }
                 }
             },
             enabled = remainingQty > 0 && !isSaving,
@@ -1202,8 +1343,34 @@ private fun PickerScanContent(
         }
     }
 
-    scanError?.let {
-        Text(it, fontSize = 12.sp, fontWeight = FontWeight.Medium, color = Color(0xFF991B1B))
+    WmsRichErrorSheet(
+        visible = scanError != null,
+        title = if (scanError?.contains("Batch", ignoreCase = true) == true) "Invalid Batch" else "Verification failed",
+        message = scanError.orEmpty(),
+        onDismiss = { scanError = null },
+    )
+
+    partialCompleteQty?.let { qty ->
+        AlertDialog(
+            onDismissRequest = { partialCompleteQty = null },
+            title = { Text("Complete line item?") },
+            text = {
+                Text(
+                    "You picked $qty of ${line.requiredCount}. Are you sure you want to complete this line item?",
+                )
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        partialCompleteQty = null
+                        onConfirmPick(line.id, qty, true)
+                    },
+                ) { Text("Yes, complete") }
+            },
+            dismissButton = {
+                TextButton(onClick = { partialCompleteQty = null }) { Text("No") }
+            },
+        )
     }
 }
 
@@ -1212,7 +1379,7 @@ private fun PickerScanContent(
 @Composable
 private fun PickerStagingScreen(
     task: PickerMyListTask,
-    headerTitle: String,
+    pickListId: String,
     sessionLines: List<PickSessionLineUi>,
     onBack: () -> Unit,
     onFinished: () -> Unit,
@@ -1222,51 +1389,88 @@ private fun PickerStagingScreen(
     val scope = rememberCoroutineScope()
     val companyId = remember { WmsSession.companyId(session) }
 
-    var showStagingInput by remember { mutableStateOf(false) }
-    var stagingLocation by remember { mutableStateOf("") }
+    val listAlreadyStaged = task.status.equals("STAGED", ignoreCase = true)
+    val needsStagingLocation = !listAlreadyStaged
+
+    var stagingLocation by remember(task.id) {
+        mutableStateOf(task.stagingLocationName?.trim().orEmpty())
+    }
+    var stagingLocations by remember { mutableStateOf<List<WmsWarehouseLocation>>(emptyList()) }
+    var isLoadingLocations by remember { mutableStateOf(true) }
     var isSubmitting by remember { mutableStateOf(false) }
     var stagingError by remember { mutableStateOf<String?>(null) }
+    var showStagingErrorPopup by remember { mutableStateOf(false) }
 
     val completedCount = sessionLines.count { it.state == PickLineUiState.Completed }
+    val totalLines = sessionLines.size
+    val canComplete = !needsStagingLocation || stagingLocation.trim().isNotEmpty()
+    val stagingLines = remember(sessionLines) {
+        sessionLines.map { line ->
+            PickerStagingLineDisplay(
+                productName = line.productName,
+                sku = line.sku,
+                batch = line.wms.displayBatch.takeIf { it != "—" }.orEmpty(),
+                location = line.locationLabel,
+                pickedQty = line.pickedCount,
+                requestedQty = line.requiredCount,
+                isComplete = line.state == PickLineUiState.Completed,
+            )
+        }
+    }
 
-    fun submitStaging(skipLocation: Boolean) {
+    LaunchedEffect(companyId, task.id) {
+        if (companyId <= 0) {
+            isLoadingLocations = false
+            return@LaunchedEffect
+        }
+        isLoadingLocations = true
+        runCatching {
+            repo.fetchStagingLocations(companyId)
+        }.onSuccess { locations ->
+            stagingLocations = locations
+            if (stagingLocation.isBlank()) {
+                locations.firstOrNull()?.displayLabel?.let { stagingLocation = it }
+            }
+        }
+        isLoadingLocations = false
+    }
+
+    fun submitStaging() {
         scope.launch {
             isSubmitting = true
             stagingError = null
             if (companyId <= 0) {
                 stagingError = "Company is not set."
-                isSubmitting = false
-                return@launch
-            }
-            val trimmed = stagingLocation.trim()
-            if (!skipLocation && showStagingInput && trimmed.length < 2) {
-                stagingError = "Enter staging number or name."
+                showStagingErrorPopup = true
                 isSubmitting = false
                 return@launch
             }
             runCatching {
-                repo.stagePickList(
-                    task.pickListId,
-                    WmsStagePickListRequest(
-                        companyId = companyId,
-                        stagingLocationName = if (skipLocation) null else trimmed.takeIf { it.isNotEmpty() },
-                    ),
-                )
+                if (needsStagingLocation) {
+                    val trimmed = stagingLocation.trim()
+                    if (trimmed.isEmpty()) {
+                        error("Enter a staging location.")
+                    }
+                    repo.stageIndustryPickList(task.pickListId, companyId, trimmed)
+                }
+                repo.completeIndustryPickList(task.pickListId)
                 onFinished()
             }.onFailure {
                 stagingError = it.message ?: "Could not save staging."
+                showStagingErrorPopup = true
             }
             isSubmitting = false
         }
     }
 
     Column(Modifier.fillMaxSize().background(WmsColors.PageBgAlt)) {
-        PickerSessionHeader(
-            title = headerTitle,
-            waveLabel = task.waveLabel,
-            toteNumber = "",
-            onBack = onBack,
+        WmsRichErrorSheet(
+            visible = showStagingErrorPopup,
+            title = "Could not save staging",
+            message = stagingError.orEmpty(),
+            onDismiss = { showStagingErrorPopup = false },
         )
+        PickerStagingHeroHeader(pickListId = pickListId, onBack = onBack)
         Column(
             Modifier
                 .weight(1f)
@@ -1274,92 +1478,47 @@ private fun PickerStagingScreen(
                 .padding(horizontal = 16.dp, vertical = 16.dp),
             verticalArrangement = Arrangement.spacedBy(16.dp),
         ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .shadow(1.dp, RoundedCornerShape(14.dp))
-                    .background(Color.White, RoundedCornerShape(14.dp))
-                    .padding(14.dp),
-            ) {
-                Text(
-                    "ALL ITEMS PICKED",
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = WmsColors.Success,
-                    letterSpacing = 0.8.sp,
-                )
-                Spacer(Modifier.height(8.dp))
-                Text(
-                    "Confirm staging area before finishing this pick list.",
-                    fontSize = 15.sp,
-                    fontWeight = FontWeight.SemiBold,
-                    color = WmsColors.TextPrimary,
-                )
-                Text(
-                    "${sessionLines.size} lines · $completedCount/${sessionLines.size} complete",
-                    fontSize = 13.sp,
-                    color = WmsColors.TextSecondary,
-                )
-            }
-            if (showStagingInput) {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text(
-                        "STAGING AREA",
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = WmsColors.TextMuted,
-                        letterSpacing = 0.6.sp,
-                    )
-                    OutlinedTextField(
-                        value = stagingLocation,
-                        onValueChange = { stagingLocation = it },
-                        modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text("Enter staging number or name", color = WmsColors.TextMuted) },
-                        singleLine = true,
-                        keyboardOptions = KeyboardOptions(capitalization = KeyboardCapitalization.Characters),
-                        textStyle = androidx.compose.ui.text.TextStyle(
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.SemiBold,
-                        ),
-                        shape = RoundedCornerShape(12.dp),
-                    )
-                }
-            }
-            stagingError?.let { WmsErrorBanner(it) }
+            PickerStagingSummaryCard(
+                toteNumber = task.toteNumber.orEmpty(),
+                pickedBatches = completedCount,
+                totalBatches = totalLines,
+                lineCount = totalLines,
+            )
+
+            PickerStagingLineItemsCard(lines = stagingLines)
+
+            PickerStagingLocationSection(
+                stagingLocation = stagingLocation,
+                onStagingLocationChange = { stagingLocation = it },
+                locations = stagingLocations,
+                isLoadingLocations = isLoadingLocations,
+                listAlreadyStaged = listAlreadyStaged,
+            )
         }
-        Row(
+        Column(
             modifier = Modifier
                 .fillMaxWidth()
+                .shadow(12.dp, spotColor = Color.Black.copy(alpha = 0.08f))
                 .background(Color.White)
+                .navigationBarsPadding()
                 .padding(horizontal = 16.dp, vertical = 14.dp),
-            horizontalArrangement = Arrangement.spacedBy(12.dp),
         ) {
             Button(
-                onClick = {
-                    if (showStagingInput) {
-                        submitStaging(skipLocation = false)
-                    } else {
-                        showStagingInput = true
-                    }
-                },
-                enabled = !isSubmitting && (!showStagingInput || stagingLocation.trim().length >= 2),
-                modifier = Modifier.weight(1f),
-                shape = RoundedCornerShape(12.dp),
+                onClick = { submitStaging() },
+                enabled = !isSubmitting && canComplete,
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .height(52.dp),
+                shape = RoundedCornerShape(14.dp),
                 colors = ButtonDefaults.buttonColors(containerColor = WmsColors.Navy),
             ) {
-                Text("Confirm Staging Area", fontWeight = FontWeight.Bold, maxLines = 1)
-            }
-            OutlinedButton(
-                onClick = { submitStaging(skipLocation = true) },
-                enabled = !isSubmitting,
-                modifier = Modifier.weight(1f),
-                shape = RoundedCornerShape(12.dp),
-                border = androidx.compose.foundation.BorderStroke(2.dp, WmsColors.Navy),
-            ) {
+                if (isSubmitting) {
+                    CircularProgressIndicator(color = Color.White, modifier = Modifier.size(18.dp), strokeWidth = 2.dp)
+                    Spacer(Modifier.width(8.dp))
+                }
                 Text(
-                    if (isSubmitting) "Saving…" else "Skip",
+                    if (isSubmitting) "Finishing…" else "Complete Pick List",
                     fontWeight = FontWeight.Bold,
-                    color = WmsColors.Navy,
                 )
             }
         }

@@ -130,7 +130,7 @@ fun MainAppScreen(
                 AppScreen.Scan -> Scans(onNavigate = {})
                 AppScreen.Analytics -> AnalyticsScreen()
                 AppScreen.Profile -> features.profile.ProfileScreen(
-                    userName = userDetail?.firstName,
+                    userName = listOfNotNull(userDetail?.firstName, userDetail?.lastName).joinToString(" ").trim().ifBlank { null },
                     email = userDetail?.email,
                     role = userDetail?.role,
                     onNavigate = {},

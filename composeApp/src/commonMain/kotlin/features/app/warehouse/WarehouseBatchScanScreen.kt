@@ -1,5 +1,6 @@
 package features.app.warehouse
 
+import features.app.warehouse.wms.WmsCircularBackButton
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -138,9 +139,7 @@ fun WarehouseBatchScanScreen(
                 .padding(20.dp),
         ) {
             Row(verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = onBack) {
-                    Icon(Icons.AutoMirrored.Filled.ArrowBack, null, tint = WarehouseColors.Muted)
-                }
+            WmsCircularBackButton(onClick = onBack)
                 Column(Modifier.weight(1f)) {
                     Text("BACK", fontSize = 11.sp, fontFamily = FontFamily.Monospace, color = WarehouseColors.Muted)
                     Text(title, fontSize = 24.sp, fontWeight = FontWeight.Black, color = Color.White)

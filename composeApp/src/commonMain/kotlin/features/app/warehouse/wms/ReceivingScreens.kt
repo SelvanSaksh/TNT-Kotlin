@@ -62,6 +62,7 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.style.TextAlign
+import core.network.epcis.EpcisFlowService
 import core.network.repository.WmsRepository
 import core.network.wms.WmsPackingReceiverCompleteRequest
 import core.network.wms.WmsPackingReceiverLine
@@ -473,6 +474,17 @@ fun ReceivingOrderDetailScreen(
                                     orderId,
                                     WmsPackingReceiverCompleteRequest(companyId, receiverId),
                                 )
+                                displayOrder?.let { tree ->
+                                    val epcUris = EpcisFlowService.epcUrisFromReceiverNode(tree)
+                                    if (epcUris.isNotEmpty()) {
+                                        EpcisFlowService.receiveGoods(
+                                            session = session,
+                                            epcUris = epcUris,
+                                            bizTransactionId = tree.orderNumber ?: orderId,
+                                            receivingConfirmed = true,
+                                        )
+                                    }
+                                }
                                 onCompleted()
                             }.onFailure { error = it.message }
                             saving = false

@@ -25,6 +25,7 @@ import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.QrCodeScanner
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.OutlinedTextField
@@ -46,6 +47,54 @@ import core.session.WarehouseStaffRole
 import features.app.warehouse.WarehouseMlKitScanner
 
 enum class WmsScanInputMode { Scan, Manual }
+
+@Composable
+fun WmsPackerHomeHeader(
+    displayName: String,
+    onLogout: () -> Unit,
+) {
+    val firstName = displayName.trim().substringBefore(' ').ifBlank { displayName }
+    val initial = firstName.firstOrNull()?.uppercaseChar()?.toString() ?: "U"
+    val navy = Color(0xFF1E3A5F)
+
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color.White)
+            .padding(horizontal = 20.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Box(
+            modifier = Modifier
+                .size(34.dp)
+                .clip(CircleShape)
+                .background(navy.copy(alpha = 0.1f)),
+            contentAlignment = Alignment.Center,
+        ) {
+            Text(initial, fontWeight = FontWeight.Bold, fontSize = 15.sp, color = navy)
+        }
+        Spacer(Modifier.width(8.dp))
+        Text(
+            text = firstName,
+            fontSize = 16.sp,
+            fontWeight = FontWeight.SemiBold,
+            color = WmsColors.TextPrimary,
+            modifier = Modifier.weight(1f),
+        )
+        Text(
+            text = "Packer",
+            modifier = Modifier
+                .background(Color(0xFFF1F5F9), RoundedCornerShape(999.dp))
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+            fontSize = 10.sp,
+            fontWeight = FontWeight.Bold,
+            color = navy,
+        )
+        Spacer(Modifier.width(8.dp))
+        WmsProfileMenuButton(displayName = displayName, onLogout = onLogout)
+    }
+    HorizontalDivider(color = WmsColors.Border, thickness = 0.5.dp)
+}
 
 @Composable
 fun WmsStaffHomeHeader(

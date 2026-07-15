@@ -42,8 +42,10 @@ import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import core.location.AppLocationCache
+import core.network.epcis.EpcisFlowService
 import core.network.repository.AppRepository
 import core.util.AuditLogHelper
+import core.util.extractGs1Batch
 import core.storage.SessionManager
 import core.storage.getLocalStorage
 import features.app.subscription.BillingRepository
@@ -541,6 +543,26 @@ fun GS12DBarcode(
                                         } else {
                                             println("❌ GS1 AUDIT FAILED: ${auditResult.exceptionOrNull()?.message}")
                                         }
+
+                                        if (gtin.isNotBlank() && serialize) {
+                                            val qty = barcodeQty.toIntOrNull() ?: 1
+                                            val start = serialStart.toIntOrNull() ?: 1
+                                            EpcisFlowService.commissionSerialRange(
+                                                session = sessionManager,
+                                                gtin = gtin,
+                                                batchNumber = fieldValues["Batch Number"]?.trim()?.takeIf { it.isNotBlank() }
+                                                    ?: extractGs1Batch(gs1Data),
+                                                serialPrefix = serialPrefix,
+                                                serialStart = start,
+                                                count = qty,
+                                            )
+                                        } else if (gtin.isNotBlank()) {
+                                            EpcisFlowService.commissionFromGs1Payload(
+                                                session = sessionManager,
+                                                gs1Payload = gs1Data,
+                                                explicitSerial = fieldValues["Serial No"]?.trim()?.takeIf { it.isNotBlank() },
+                                            )
+                                        }
                                     }
                                 }
                                 is BarcodeResult.Multiple -> {
@@ -582,6 +604,22 @@ fun GS12DBarcode(
                                             println("✅ MULTIPLE AUDIT SUCCESS")
                                         } else {
                                             println("❌ MULTIPLE AUDIT FAILED: ${auditResult.exceptionOrNull()?.message}")
+                                        }
+
+                                        if (gtin.isNotBlank() && serialize) {
+                                            val qty = result.urls.size.takeIf { it > 0 }
+                                                ?: barcodeQty.toIntOrNull()
+                                                ?: 1
+                                            val start = serialStart.toIntOrNull() ?: 1
+                                            EpcisFlowService.commissionSerialRange(
+                                                session = sessionManager,
+                                                gtin = gtin,
+                                                batchNumber = fieldValues["Batch Number"]?.trim()?.takeIf { it.isNotBlank() }
+                                                    ?: extractGs1Batch(gs1Data),
+                                                serialPrefix = serialPrefix,
+                                                serialStart = start,
+                                                count = qty,
+                                            )
                                         }
                                     }
                                 }

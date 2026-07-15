@@ -3,6 +3,7 @@ package features.app.warehouse
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
+import utils.Gs1Parser
 
 /** Line item shown on warehouse batch scan / verification screens (aligned with iOS scan models). */
 data class BatchScanLineItem(
@@ -31,15 +32,20 @@ private data class ScannedProductJson(
 
 private val scanJson = Json { ignoreUnknownKeys = true }
 
-fun productMatchesScan(payload: String, expectedGtin: String, expectedBatch: String): Boolean =
-    gtinMatchesScan(payload, expectedGtin) && batchMatchesScan(payload, expectedBatch)
+fun productMatchesScan(payload: String, expectedGtin: String, expectedBatch: String): Boolean {
+    if (!gtinMatchesScan(payload, expectedGtin)) return false
+    val expectedBatchNorm = normalizeBatch(expectedBatch)
+    if (expectedBatchNorm.isEmpty()) return true
+    return batchMatchesScan(payload, expectedBatch)
+}
 
 fun batchMatchesScan(payload: String, expectedBatch: String): Boolean {
     val expected = normalizeBatch(expectedBatch)
     if (expected.isEmpty()) return false
-    val scanned = scanCandidatesFromPayload(payload).batch?.let(::normalizeBatch)
-        ?: normalizeBatch(payload).takeIf { it.isNotEmpty() }
-    return scanned == expected
+    val candidates = scanCandidatesFromPayload(payload)
+    if (candidates.values.any { normalizeBatch(it) == expected }) return true
+    val plain = normalizeBatch(payload)
+    return plain.isNotEmpty() && plain == expected
 }
 
 fun gtinMatchesScan(payload: String, expectedGtin: String): Boolean {
@@ -128,6 +134,17 @@ fun scanCandidatesFromPayload(
         decoded.sku?.trim()?.takeIf { it.isNotEmpty() }?.let {
             values += it
             detectedSku = it
+        }
+    }
+
+    Gs1Parser.parse(trimmed).let { parsed ->
+        parsed.batch?.trim()?.takeIf { it.isNotEmpty() }?.let {
+            values += it
+            detectedBatch = detectedBatch ?: it
+        }
+        parsed.gtin?.trim()?.takeIf { it.isNotEmpty() }?.let {
+            values += it
+            detectedGtin = detectedGtin ?: it
         }
     }
 

@@ -170,6 +170,26 @@ fun App() {
                 }
             }
 
+            // Safety net: prevent back-navigating to guest screen when logged in
+            BackHandler(
+                enabled = sessionManager.isLoggedIn() &&
+                    currentRoute != Screens.HomeScreen.destRoute &&
+                    currentRoute != Screens.LoginScreen.destRoute &&
+                    currentRoute != Screens.OTPScreen.destRoute &&
+                    currentRoute != Screens.SplashScreen.destRoute &&
+                    currentRoute != Screens.GuestHomeScreen.destRoute,
+            ) {
+                val prevRoute = navController.previousBackStackEntry?.destination?.route
+                if (prevRoute == Screens.GuestHomeScreen.destRoute) {
+                    navController.navigate(Screens.HomeScreen.destRoute) {
+                        popUpTo(Screens.GuestHomeScreen.destRoute) { inclusive = true }
+                        launchSingleTop = true
+                    }
+                } else {
+                    navController.popBackStack()
+                }
+            }
+
             NavHost(
                 navController = navController,
                 startDestination = Screens.SplashScreen.destRoute,
@@ -343,6 +363,7 @@ fun App() {
                         },
                         onSignIn = {
                             navController.navigate(Screens.LoginScreen.destRoute) {
+                                popUpTo(Screens.GuestHomeScreen.destRoute) { inclusive = true }
                                 launchSingleTop = true
                             }
                         },

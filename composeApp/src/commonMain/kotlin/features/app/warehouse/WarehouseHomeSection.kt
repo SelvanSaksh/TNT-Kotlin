@@ -6,12 +6,9 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.KeyboardArrowRight
@@ -30,9 +27,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-private val NavyDark = Color(0xFF163C66)
 private val TextPrimary = Color(0xFF111827)
-private val TextMuted = Color(0xFF9CA3AF)
 private val TextSub = Color(0xFF6B7280)
 
 val defaultWarehouseModules: List<WarehouseModuleItem> = listOf(
@@ -76,98 +71,62 @@ fun WarehouseHomeSection(
             modifier = Modifier.padding(16.dp),
             verticalArrangement = Arrangement.spacedBy(14.dp),
         ) {
-            Row(verticalAlignment = Alignment.Top) {
-                Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    Text(
-                        "Warehouse Features",
-                        fontSize = 16.sp,
-                        fontWeight = FontWeight.Bold,
-                        color = TextPrimary,
-                    )
-                    Text(
-                        "Pick, pack, and receive workflows",
-                        fontSize = 12.sp,
-                        color = TextMuted,
-                    )
-                }
-                Text(
-                    "${modules.size}",
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = NavyDark,
-                    modifier = Modifier
-                        .background(Color(0xFFE8EEF5), CircleShape)
-                        .padding(horizontal = 10.dp, vertical = 5.dp),
-                )
-            }
+            Text(
+                "Warehouse Operations",
+                fontSize = 16.sp,
+                fontWeight = FontWeight.Bold,
+                color = TextPrimary,
+            )
 
-            val rows = modules.chunked(2)
-            rows.forEach { rowModules ->
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.spacedBy(12.dp),
-                ) {
-                    rowModules.forEach { module ->
-                        WarehouseModuleCard(
-                            module = module,
-                            modifier = Modifier.weight(1f),
-                            onClick = {
-                                val route = when {
-                                    module.name.contains("Picking", ignoreCase = true) -> WarehouseRoute.Picking
-                                    module.name.contains("Packing", ignoreCase = true) -> WarehouseRoute.Packing
-                                    else -> WarehouseRoute.Receiving
-                                }
-                                onModuleClick(route)
-                            },
-                        )
-                    }
-                    if (rowModules.size == 1) {
-                        Spacer(Modifier.weight(1f))
-                    }
-                }
+            modules.forEach { module ->
+                WarehouseModuleListItem(
+                    module = module,
+                    onClick = {
+                        val route = when {
+                            module.name.contains("Picking", ignoreCase = true) -> WarehouseRoute.Picking
+                            module.name.contains("Packing", ignoreCase = true) -> WarehouseRoute.Packing
+                            else -> WarehouseRoute.Receiving
+                        }
+                        onModuleClick(route)
+                    },
+                )
             }
         }
     }
 }
 
 @Composable
-private fun WarehouseModuleCard(
+private fun WarehouseModuleListItem(
     module: WarehouseModuleItem,
-    modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
-    Column(
-        modifier = modifier
-            .height(146.dp)
-            .background(Color(0xFFF9FAFB), RoundedCornerShape(16.dp))
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .background(Color(0xFFF9FAFB), RoundedCornerShape(12.dp))
             .clickable(onClick = onClick)
             .padding(14.dp),
-        verticalArrangement = Arrangement.SpaceBetween,
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-                modifier = Modifier
-                    .size(42.dp)
-                    .background(module.accent.copy(alpha = 0.12f), RoundedCornerShape(12.dp)),
-                contentAlignment = Alignment.Center,
-            ) {
-                Icon(
-                    module.icon,
-                    contentDescription = null,
-                    tint = module.accent,
-                    modifier = Modifier.size(20.dp),
-                )
-            }
-            Spacer(Modifier.weight(1f))
+        Box(
+            modifier = Modifier
+                .size(42.dp)
+                .background(module.accent.copy(alpha = 0.12f), RoundedCornerShape(12.dp)),
+            contentAlignment = Alignment.Center,
+        ) {
             Icon(
-                Icons.AutoMirrored.Filled.KeyboardArrowRight,
+                module.icon,
                 contentDescription = null,
-                tint = Color(0xFFD1D5DB),
-                modifier = Modifier.size(18.dp),
+                tint = module.accent,
+                modifier = Modifier.size(20.dp),
             )
         }
-
-        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Column(
+            modifier = Modifier
+                .weight(1f)
+                .padding(horizontal = 12.dp),
+            verticalArrangement = Arrangement.spacedBy(2.dp),
+        ) {
             Text(
                 module.name,
                 fontSize = 15.sp,
@@ -179,18 +138,14 @@ private fun WarehouseModuleCard(
                 module.subtitle,
                 fontSize = 11.sp,
                 color = TextSub,
-                maxLines = 2,
+                maxLines = 1,
             )
         }
-
-        Text(
-            "Available",
-            fontSize = 10.sp,
-            fontWeight = FontWeight.SemiBold,
-            color = module.accent,
-            modifier = Modifier
-                .background(module.accent.copy(alpha = 0.10f), CircleShape)
-                .padding(horizontal = 8.dp, vertical = 4.dp),
+        Icon(
+            Icons.AutoMirrored.Filled.KeyboardArrowRight,
+            contentDescription = null,
+            tint = Color(0xFFD1D5DB),
+            modifier = Modifier.size(20.dp),
         )
     }
 }

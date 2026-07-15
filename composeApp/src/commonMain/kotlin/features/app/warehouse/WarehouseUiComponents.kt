@@ -1,5 +1,6 @@
 package features.app.warehouse
 
+import features.app.warehouse.wms.WmsCircularBackButton
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -94,19 +95,7 @@ fun WarehouseModuleHeader(
                 verticalAlignment = Alignment.CenterVertically,
             ) {
                 if (showBackNavigation) {
-                    IconButton(
-                        onClick = onBack,
-                        modifier = Modifier
-                            .size(36.dp)
-                            .background(Color.White.copy(alpha = 0.10f), CircleShape),
-                    ) {
-                        Icon(
-                            Icons.AutoMirrored.Filled.ArrowBack,
-                            contentDescription = "Back",
-                            tint = Color.White,
-                            modifier = Modifier.size(18.dp),
-                        )
-                    }
+                    WmsCircularBackButton(onClick = onBack)
                     Spacer(Modifier.width(12.dp))
                 }
                 Column {

@@ -29,8 +29,10 @@ import components.InputField
 import components.PrimaryButton
 import core.network.models.FetchAi
 import core.location.AppLocationCache
+import core.network.epcis.EpcisFlowService
 import core.network.repository.AppRepository
 import core.util.AuditLogHelper
+import core.util.extractGs1Gtin
 import core.storage.SessionManager
 import core.storage.getLocalStorage
 import features.app.subscription.BillingRepository
@@ -495,6 +497,27 @@ fun GS1DigitalBarcodeScreen(
                                 println("✅ DIGITAL LINK AUDIT SUCCESS")
                             } else {
                                 println("❌ DIGITAL LINK AUDIT FAILED: ${auditResult.exceptionOrNull()?.message}")
+                            }
+
+                            val gtin = when {
+                                selectedIdentifier?.key == "(01)" -> form.identifierValue.trim()
+                                else -> extractGs1Gtin(url)
+                            }
+                            if (gtin.isNotBlank()) {
+                                val gs1ForCommission = buildString {
+                                    append("(01)").append(gtin.filter { it.isDigit() })
+                                    form.batchLotNumber.trim().takeIf { it.isNotBlank() }?.let {
+                                        append("(10)").append(it)
+                                    }
+                                    form.serialNumber.trim().takeIf { it.isNotBlank() }?.let {
+                                        append("(21)").append(it)
+                                    }
+                                }
+                                EpcisFlowService.commissionFromGs1Payload(
+                                    session = sessionManager,
+                                    gs1Payload = gs1ForCommission,
+                                    explicitSerial = form.serialNumber.trim().takeIf { it.isNotBlank() },
+                                )
                             }
                         }
                     }

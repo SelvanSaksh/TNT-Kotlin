@@ -1,9 +1,8 @@
 package network
 
 /**
- * Production API host only. All authenticated app calls and payment endpoints
- * (`/payments/create-order`, `/payments/verify`, `/companies/subscriptions`, …)
- * use this URL over HTTPS. There is no local or staging override in the client.
+ * Production API host only. All app API calls use this HTTPS URL.
+ * Backend: deployed TrackandTrace-backend (same contract as iOS).
  */
 object Config {
     const val BASE_URL = "https://api.tnt.sakksh.com"
