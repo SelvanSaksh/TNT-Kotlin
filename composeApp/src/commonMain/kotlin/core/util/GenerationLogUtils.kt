@@ -47,6 +47,50 @@ fun extractGs1Gtin(gs1: String): String {
         .orEmpty()
 }
 
+fun normalizeGtin(gtin: String): String {
+    val digits = gtin.filter { it.isDigit() }
+    return if (digits.length in 8..13) digits.padStart(14, '0') else digits
+}
+
+/** True when the scan carries GS1 AIs (GTIN, Digital Link, element string, or GS1-128). */
+fun isGs1Barcode(
+    gtin: String = "",
+    serial: String = "",
+    batch: String = "",
+    barcodeType: String = "",
+    barcodeData: String = "",
+): Boolean {
+    if (gtin.filter { it.isDigit() }.length in 8..14) return true
+    val type = barcodeType.uppercase().replace("-", "").replace(" ", "")
+    if ("GS1" in type) return true
+    val data = barcodeData
+    if (data.contains("(01)") || data.contains("/01/") ||
+        data.contains("dl.ratifye.ai", ignoreCase = true) ||
+        data.contains("id.gs1.org", ignoreCase = true)
+    ) return true
+    if (data.contains('\u001D')) return true
+    return serial.isNotBlank() && batch.isNotBlank() &&
+        data.any { it.isDigit() }
+}
+
+/**
+ * EPC SGTIN-96 URI, e.g. `urn:epc:id:sgtin:8901234.567890.123456`.
+ *
+ * Company prefix is 7 digits for GS1 India (`890…`); otherwise 7 as well so
+ * the item reference stays 5–6 digits after dropping the GTIN check digit.
+ */
+fun sgtinEpcUrn(gtin: String, serial: String): String {
+    val digits = gtin.filter { it.isDigit() }
+    if (digits.isEmpty()) return serial.ifBlank { gtin }
+    val gtin14 = digits.padStart(14, '0').takeLast(14)
+    val body = gtin14.drop(1).dropLast(1)
+    val gcpLen = if (body.startsWith("890")) 7 else 7
+    val gcp = body.take(gcpLen)
+    val itemRef = body.drop(gcpLen)
+    val ser = serial.trim().ifBlank { "0" }
+    return "urn:epc:id:sgtin:$gcp.$itemRef.$ser"
+}
+
 /**
  * Mints a unique-per-generation event id, e.g. `evt_android_1746780600000_4271`.
  * The shape mirrors the API example (`evt_custom_generation_0001`).

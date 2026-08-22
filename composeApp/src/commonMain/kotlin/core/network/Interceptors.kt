@@ -14,10 +14,24 @@ fun clearAuthToken() {
     AUTH_TOKEN = null
 }
 
+/**
+ * Endpoints that are reachable without a session. Digital Link resolution runs
+ * for guests too, so a 401 from those paths must not sign anyone out.
+ */
+private val PUBLIC_PATHS = setOf(
+    "/auth/login",
+    "/auth/otp-verification",
+    "/productmaster/scan/authenticate",
+    "/productmaster/config",
+    "/ratifye/pages/resolve/by-gtin",
+    "/productmaster/details/by-gtin",
+    "/companies/barcode/create",
+)
+
 private fun shouldForceLoginOnUnauthorized(url: String): Boolean {
     if (!url.startsWith(Config.BASE_URL)) return false
     val path = url.removePrefix(Config.BASE_URL).substringBefore('?')
-    return path != "/auth/login" && path != "/auth/otp-verification"
+    return path !in PUBLIC_PATHS
 }
 
 val AuthInterceptor = createClientPlugin("AuthInterceptor") {

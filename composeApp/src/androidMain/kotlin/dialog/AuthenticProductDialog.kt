@@ -38,6 +38,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
 import androidx.compose.ui.unit.dp
@@ -310,11 +311,16 @@ private val ChipBlueBg    = Color(0xFFE3F2FD)
 private val DividerColor  = Color(0xFFEEEEEE)
 private val CardBg        = Color(0xFFF7F8FA)
 
-/** Digital Link block is shown only for Ratifye resolver URLs. */
-private fun findRatifyeDigitalLink(vararg candidates: String): String? =
-    candidates.firstOrNull { url ->
-        url.trim().contains("dl.ratifye.ai", ignoreCase = true)
-    }?.trim()?.takeIf { it.isNotEmpty() }
+private val HTTP_URL = Regex(
+    """https?://[^\s"'<>\\]+""",
+    RegexOption.IGNORE_CASE,
+)
+
+/** First http(s) URL in a scanned value, used to open the browser from the dialog. */
+private fun findHttpUrl(vararg candidates: String): String? =
+    candidates.firstNotNullOfOrNull { candidate ->
+        HTTP_URL.find(candidate.trim())?.value?.trim()?.trimEnd(',', '.', ')', ']')
+    }?.takeIf { it.isNotEmpty() }
 
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -356,19 +362,19 @@ fun AuthenticProductDialog(
     }
     val titleText = when {
         !hasQuality -> "Scan Result"
-        isReal -> "Authentic Product"
+        isReal -> "Ratifye'd"
         isFake -> "Counterfeit Detected"
         else -> "Verification Result"
     }
     val subtitleText = when {
         !hasQuality -> "Parsed barcode data from scan."
-        isReal -> "Verified as genuine."
+        isReal -> "Cryptographically verified."
         isFake -> "This product may be fake."
         else -> result.quality
     }
 
     val rawDataText = raw.ifBlank { result.rawBarcode }.ifBlank { result.barcodeData }
-    val ratifyeLink = findRatifyeDigitalLink(raw, result.barcodeData, result.rawBarcode)
+    val httpUrl = findHttpUrl(result.barcodeData, result.rawBarcode, raw, rawDataText)
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -488,6 +494,8 @@ fun AuthenticProductDialog(
                         ScanDetailsSection(
                             rawData = rawDataText,
                             barcodeType = result.barcodeType,
+                            linkUrl = httpUrl,
+                            onLinkClick = onLinkClick,
                         )
 
                         if (result.gs1Fields.isNotEmpty()) {
@@ -506,13 +514,13 @@ fun AuthenticProductDialog(
                             DynamicGs1Grid(fields = result.gs1Fields)
                         }
 
-                        if (ratifyeLink != null) {
+                        if (httpUrl != null) {
                             HorizontalDivider(
                                 color = DividerColor,
                                 modifier = Modifier.padding(vertical = 18.dp),
                             )
                             Text(
-                                text = "DIGITAL LINK",
+                                text = "LINK",
                                 fontSize = 14.sp,
                                 fontWeight = FontWeight.Medium,
                                 letterSpacing = 1.sp,
@@ -524,7 +532,7 @@ fun AuthenticProductDialog(
                                 color = BlueLinkBg,
                                 modifier = Modifier
                                     .fillMaxWidth()
-                                    .clickable { onLinkClick(ratifyeLink) },
+                                    .clickable { onLinkClick(httpUrl) },
                             ) {
                                 Row(
                                     verticalAlignment = Alignment.CenterVertically,
@@ -541,11 +549,12 @@ fun AuthenticProductDialog(
                                     }
                                     Spacer(modifier = Modifier.width(10.dp))
                                     Text(
-                                        text = ratifyeLink,
+                                        text = httpUrl,
                                         color = BlueLinkText,
                                         fontSize = 13.sp,
                                         maxLines = 2,
                                         overflow = TextOverflow.Ellipsis,
+                                        textDecoration = TextDecoration.Underline,
                                         modifier = Modifier.weight(1f),
                                     )
                                     Spacer(modifier = Modifier.width(6.dp))
@@ -597,6 +606,8 @@ fun AuthenticProductDialog(
 private fun ScanDetailsSection(
     rawData: String,
     barcodeType: String,
+    linkUrl: String? = null,
+    onLinkClick: (String) -> Unit = {},
 ) {
     Row(
         modifier = Modifier
@@ -643,17 +654,41 @@ private fun ScanDetailsSection(
             Surface(
                 shape = RoundedCornerShape(10.dp),
                 color = Color.White,
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .then(
+                        if (linkUrl != null) Modifier.clickable { onLinkClick(linkUrl) }
+                        else Modifier,
+                    ),
             ) {
-                Text(
-                    text = rawData.ifBlank { "—" },
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.Medium,
-                    color = Color(0xFF1A1A1A),
+                Row(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(12.dp),
-                )
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    Text(
+                        text = rawData.ifBlank { "—" },
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = if (linkUrl != null) BlueLinkText else Color(0xFF1A1A1A),
+                        textDecoration = if (linkUrl != null) {
+                            TextDecoration.Underline
+                        } else {
+                            TextDecoration.None
+                        },
+                        modifier = Modifier.weight(1f),
+                    )
+                    if (linkUrl != null) {
+                        Icon(
+                            imageVector = Icons.Filled.OpenInNew,
+                            contentDescription = "Open link",
+                            tint = BlueLinkText,
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                }
             }
         }
     }

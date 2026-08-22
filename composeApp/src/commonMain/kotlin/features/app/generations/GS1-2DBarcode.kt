@@ -81,7 +81,7 @@ private val httpClient = HttpClient {
     }
 }
 
-private const val BASE_URL = "https://dlhub.8aiku.com/gen"
+private const val BASE_URL = "https://verify.gs1r.ai/gen"
 
 private fun buildGS1String(
     gtin: String,

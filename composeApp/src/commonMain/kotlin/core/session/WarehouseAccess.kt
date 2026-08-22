@@ -125,7 +125,6 @@ class WarehouseAccess(private val sessionManager: SessionManager) {
     }
 
     fun postAuthDestination(hasActiveSubscription: Boolean): PostAuthDestination = when {
-        !hasActiveSubscription -> PostAuthDestination.Subscription
         needsWarehouseRoleSelection -> PostAuthDestination.RoleSelection
         else -> PostAuthDestination.Home
     }

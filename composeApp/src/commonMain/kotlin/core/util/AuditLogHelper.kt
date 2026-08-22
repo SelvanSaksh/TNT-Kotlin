@@ -1,21 +1,82 @@
 package core.util
 
 import core.location.AppLocationCache
+import core.network.PublicIpCache
 import core.network.models.GenerationLogRequest
 import core.network.models.ScanLogCreateRequest
 import core.storage.SessionManager
+import com.ratifye.app.getPlatform
 import kotlinx.datetime.Clock
 import kotlinx.serialization.json.Json
 import network.Config
 import network.models.UserDetail
 import org.json.JSONObject
+import resolver.parseDigitalLink
 import kotlin.random.Random
 
 object AuditLogHelper {
 
     private val userDetailJson = Json { ignoreUnknownKeys = true }
 
-    fun resolveCompanyId(sessionManager: SessionManager): Int {
+    fun companyIdFromBarcode(vararg sources: String): Int? {
+        val blob = sources.joinToString(" ").replace("\\/", "/")
+        parseIntId(
+            Regex(""""ai"\s*:\s*"97"[\s\S]{0,180}?"value"\s*:\s*"([^"]+)"""")
+                .find(blob)?.groupValues?.getOrNull(1),
+        )?.let { return it }
+        parseIntId(
+            Regex(""""97"\s*:\s*\{[\s\S]{0,180}?"value"\s*:\s*"([^"]+)"""")
+                .find(blob)?.groupValues?.getOrNull(1),
+        )?.let { return it }
+        parseIntId(
+            Regex("""(?:/97/|\(97\)|[?&]97=)([^/?#&()"'\s]+)""")
+                .find(blob)?.groupValues?.getOrNull(1),
+        )?.let { return it }
+        Regex("""https?://[^\s"'<>]+""").findAll(blob).forEach { match ->
+            val parsed = runCatching { parseDigitalLink(match.value) }.getOrNull() ?: return@forEach
+            parseIntId(parsed.ai97)?.let { return it }
+            parsed.data.specialIdentifiers
+                .firstOrNull { it.code == "97" }
+                ?.value
+                ?.let { parseIntId(it) }
+                ?.let { return it }
+        }
+        return null
+    }
+
+    fun gtinFromBarcode(vararg sources: String): String {
+        val blob = sources.joinToString(" ").replace("\\/", "/")
+        Regex(""""ai"\s*:\s*"0[12]"[\s\S]{0,180}?"value"\s*:\s*"([^"]+)"""")
+            .find(blob)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.let { return normalizeGtin(it) }
+        Regex("""(?:/01/|\(01\)|[?&]01=)([^/?#&()"'\s]+)""")
+            .find(blob)
+            ?.groupValues
+            ?.getOrNull(1)
+            ?.let { return normalizeGtin(it) }
+        Regex("""https?://[^\s"'<>]+""").findAll(blob).forEach { match ->
+            val parsed = runCatching { parseDigitalLink(match.value) }.getOrNull() ?: return@forEach
+            parsed.gtin?.let { return normalizeGtin(it) }
+            parsed.data.identifiers.firstOrNull { it.code == "01" || it.code == "02" }?.value
+                ?.let { return normalizeGtin(it) }
+        }
+        return ""
+    }
+
+    private fun parseIntId(raw: String?): Int? =
+        raw?.trim()?.filter { it.isDigit() }?.toIntOrNull()?.takeIf { it > 0 }
+
+    fun isoEventTime(): String {
+        val raw = Clock.System.now().toString().removeSuffix("Z")
+        val main = raw.substringBefore('.')
+        val frac = raw.substringAfter('.', "000").filter { it.isDigit() }.padEnd(3, '0').take(3)
+        return "${main}.${frac}Z"
+    }
+
+    fun resolveCompanyId(sessionManager: SessionManager, vararg barcodeHints: String): Int {
+        companyIdFromBarcode(*barcodeHints)?.let { return it }
         sessionManager.getCompanyId()?.toIntOrNull()?.takeIf { it > 0 }?.let { return it }
         val ud = sessionManager.getUserDetail().orEmpty()
         if (ud.isNotBlank()) {
@@ -54,10 +115,10 @@ object AuditLogHelper {
         isAuthFlow: Boolean,
         isGuest: Boolean,
     ): String {
-        if (!isAuthFlow) return "UNKNOWN"
         return when {
             quality.equals("Real", ignoreCase = true) -> "AUTHENTIC"
             quality.equals("Fake", ignoreCase = true) -> "DIVERTED"
+            !isAuthFlow -> "AUTHENTIC"
             isGuest -> "DIVERTED"
             else -> "AUTHENTIC"
         }
@@ -83,7 +144,7 @@ object AuditLogHelper {
         }
     }
 
-    fun buildScanLogRequest(
+    suspend fun buildScanLogRequest(
         sessionManager: SessionManager,
         epcId: String,
         barcodeType: String,
@@ -94,33 +155,76 @@ object AuditLogHelper {
         isAuthFlow: Boolean,
         scannedValue: String,
         authResultOverride: String? = null,
+        signature: String? = null,
+        companyIdOverride: Int? = null,
     ): ScanLogCreateRequest {
+        PublicIpCache.ensure()
         val (lat, lon) = AppLocationCache.coordinates()
-        val geo = AppLocationCache.geoLocation
-        val companyId = resolveCompanyId(sessionManager)
-        val userId = resolveUserId(sessionManager)
-        val isGuest = userId == 0
+        val geo = AppLocationCache.geoLocation.trim().let { label ->
+            if (label.isNotBlank() && !label.equals("Unknown", ignoreCase = true)) {
+                label.take(512)
+            } else {
+                listOf(lat, lon).joinToString(",")
+            }
+        }
+        val fromBarcode = companyIdOverride?.takeIf { it > 0 }
+            ?: companyIdFromBarcode(barcodeData, scannedValue, epcId)
+        val companyId = fromBarcode
+            ?: sessionManager.getCompanyId()?.toIntOrNull()?.takeIf { it > 0 }
+            ?: run {
+                val ud = sessionManager.getUserDetail().orEmpty()
+                if (ud.isBlank()) null
+                else runCatching { userDetailJson.decodeFromString<UserDetail>(ud).companyId }
+                    .getOrNull()
+                    ?.takeIf { it > 0 }
+            }
+            ?: Config.DEFAULT_COMPANY_ID
+        val userId = resolveUserId(sessionManager).takeIf { it > 0 }
+        val isGuest = userId == null
         val quality = parseScanQuality(scannedValue)
         val authResult = authResultOverride
             ?: mapAuthResultForScan(quality, isAuthFlow, isGuest)
 
-        val gtinPayload = gtin.trim()
+        val gtinPayload = normalizeGtin(gtin).ifBlank {
+            gtinFromBarcode(barcodeData, scannedValue, epcId)
+        }
+        val serialPayload = serial.trim().ifBlank { "0" }
+        val epcUrn = if (gtinPayload.isNotBlank()) {
+            sgtinEpcUrn(gtinPayload, serialPayload)
+        } else {
+            epcId
+        }
+        val device = if (getPlatform().name.startsWith("iOS", ignoreCase = true)) "ios" else "android"
+        val sig = signature?.trim()?.takeIf { it.isNotEmpty() && it.length in 1..128 } ?: "0xandroid"
+        val scanner = scannerId(sessionManager)
         return ScanLogCreateRequest(
-            event_type = if (isAuthFlow) "AUTHENTICATE" else "SCAN",
-            epc_id = epcId,
-            event_time = Clock.System.now().toString(),
+            event_type = "SCAN",
+            epc_id = epcUrn,
+            event_time = isoEventTime(),
+            biz_step = "urn:epcglobal:cbv:bizstep:inspecting",
+            biz_location = "urn:epc:id:sgln:0614141.00001.0",
             geo_location = geo,
             auth_result = authResult,
-            scanner_id = scannerId(sessionManager),
+            scanner_id = scanner,
+            signature = sig,
             company_id = companyId,
             user_id = userId,
-            lat = lat,
-            long = lon,
-            barcode_type = barcodeType,
-            barcode_data = barcodeData,
-            serial = serial,
-            batch = batch,
             gtin = gtinPayload,
+            lat = lat,
+            longitude = lon,
+            barcode_type = barcodeType.ifBlank { "QR" },
+            barcode_data = if (gtinPayload.isNotBlank() && !barcodeData.contains("/01/")) {
+                "https://dl.ratifye.ai/01/$gtinPayload"
+            } else {
+                barcodeData.ifBlank {
+                    if (gtinPayload.isNotBlank()) "https://dl.ratifye.ai/01/$gtinPayload" else scannedValue
+                }
+            },
+            device_type = device,
+            device_id = scanner,
+            ipaddress = PublicIpCache.value,
+            serial = serialPayload,
+            batch = batch.trim().ifBlank { "NA" },
         )
     }
 

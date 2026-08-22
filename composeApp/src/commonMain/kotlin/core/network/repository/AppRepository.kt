@@ -13,6 +13,11 @@ import core.util.ScanAuditLog
 import io.ktor.client.call.body
 import io.ktor.client.request.get
 import io.ktor.client.request.headers
+import io.ktor.client.request.post
+import io.ktor.client.request.setBody
+import io.ktor.client.statement.bodyAsText
+import io.ktor.http.ContentType
+import io.ktor.http.contentType
 import io.ktor.http.encodeURLParameter
 import network.ApiClient
 
@@ -39,13 +44,13 @@ object AppRepository {
             val encodedData = data.encodeURLParameter()
 
             val fullUrl =
-                "https://dlhub.8aiku.com/gen/gen-barcode?bc_type=$bcType&data=$encodedData"
+                "https://verify.gs1r.ai/gen/gen-barcode?bc_type=$bcType&data=$encodedData"
             // ✅ Call external API
             val response = ApiClient.get<BarcodeResponse>(endpoint = fullUrl)
 
             // ✅ Build preview URL
             val imageUrl =
-                "https://dlhub.8aiku.com/gen/download-image" +
+                "https://verify.gs1r.ai/gen/download-image" +
                         "?folder_variable=TMP_IMAGE_FOLDER" +
                         "&filename=${response.filename}"
 
@@ -80,13 +85,23 @@ object AppRepository {
             "POST /companies/barcode/create event=${body.event_type} user=${body.user_id} company=${body.company_id}",
         )
         ScanAuditLog.line("body=${ScanAuditLog.formatRequestBody(body)}")
+        return postBarcodeCreate(body)
+    }
+
+    private suspend fun postBarcodeCreate(body: ScanLogCreateRequest): Result<Unit> {
         return try {
-            val response = ApiClient.post<ScanLogCreateRequest, AuditLogResponse>(
-                endpoint = "/companies/barcode/create",
-                payload = body,
-            )
-            ScanAuditLog.line("POST OK success=${response.success} msg=${response.message}")
-            Result.success(Unit)
+            val http = ApiClient.client.post(network.Config.BASE_URL + "/companies/barcode/create") {
+                contentType(ContentType.Application.Json)
+                setBody(body)
+            }
+            val text = http.bodyAsText()
+            if (http.status.value in 200..299) {
+                ScanAuditLog.line("POST OK ${http.status} ${text.take(240)}")
+                Result.success(Unit)
+            } else {
+                ScanAuditLog.line("POST HTTP ${http.status} $text")
+                Result.failure(Exception("HTTP ${http.status.value}: $text"))
+            }
         } catch (e: Exception) {
             ScanAuditLog.line("POST FAILED ${e::class.simpleName}: ${e.message}")
             e.printStackTrace()

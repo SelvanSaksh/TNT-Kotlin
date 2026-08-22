@@ -1,5 +1,6 @@
 package core.network.models
 
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlin.time.ExperimentalTime
 import kotlin.time.Instant
@@ -96,22 +97,25 @@ data class ScanLogCreateRequest(
     val event_type: String,
     val epc_id: String,
     val event_time: String,
-    val biz_step: String = "inspecting",
-    val biz_location: String = "urn:epc:id:sgln:0001234.00000.0",
+    val biz_step: String = "urn:epcglobal:cbv:bizstep:inspecting",
+    val biz_location: String = "urn:epc:id:sgln:0614141.00001.0",
     val geo_location: String,
     val auth_result: String,
     val scanner_id: String,
     val signature: String = "0xandroid",
     val company_id: Int,
-    val user_id: Int = 0,
+    val user_id: Int? = null,
+    val gtin: String = "",
     val lat: Double = 0.0,
-    val long: Double = 0.0,
+    @SerialName("longitude")
+    val longitude: Double = 0.0,
     val barcode_type: String = "QR",
     val barcode_data: String = "",
     val device_type: String = "android",
+    val device_id: String = "",
+    val ipaddress: String = "",
     val serial: String = "",
     val batch: String = "",
-    val gtin: String = "",
 )
 
 @Serializable

@@ -67,8 +67,8 @@ private val client = HttpClient {
     install(ContentNegotiation) { json(Json { ignoreUnknownKeys = true }) }
 }
 
-private const val GEN_URL      = "https://dlhub.8aiku.com/gen/gen-barcode"
-private const val DOWNLOAD_URL = "https://dlhub.8aiku.com/gen/download-image"
+private const val GEN_URL      = "https://verify.gs1r.ai/gen/gen-barcode"
+private const val DOWNLOAD_URL = "https://verify.gs1r.ai/gen/download-image"
 
 @OptIn(ExperimentalTime::class)
 @Composable

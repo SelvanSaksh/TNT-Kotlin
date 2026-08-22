@@ -333,20 +333,7 @@ fun App() {
                 }
 
                 composable(Screens.GuestHomeScreen.destRoute) {
-                    GuestMainAppScreen(
-                        onNavigate = { screen ->
-                            navController.navigate(screen.destRoute)
-                        },
-                        onNavigateBarcode = { type ->
-                            selectedBarcodeType = type
-                            navController.navigate(Screens.CommonBarcodeScreen.destRoute)
-                        },
-                        onSignIn = {
-                            navController.navigate(Screens.LoginScreen.destRoute) {
-                                launchSingleTop = true
-                            }
-                        },
-                    )
+                    GuestMainAppScreen()
                 }
 
                 composable(Screens.HomeScreen.destRoute) {

@@ -1,6 +1,8 @@
 package features.app.scans
 
+import android.app.Activity
 import android.content.Intent
+import android.content.pm.ActivityInfo
 import android.net.Uri
 import android.util.Log
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -21,6 +23,8 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.viewinterop.AndroidView
+import androidx.compose.ui.window.Dialog
+import androidx.compose.ui.window.DialogProperties
 import androidx.core.net.toUri
 import androidx.lifecycle.compose.LocalLifecycleOwner
 import com.example.scanner_sdk.customview.ScanMode
@@ -31,16 +35,22 @@ import core.location.AppLocationCache
 import core.network.repository.AppRepository
 import core.util.AuditLogHelper
 import core.util.ScanAuditLog
+import core.util.isGs1Barcode
+import core.util.sgtinEpcUrn
 import core.storage.SessionManager
 import core.storage.getLocalStorage
+import core.storage.LocalScanRecord
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withTimeoutOrNull
+import kotlinx.datetime.Clock
 import network.AUTH_TOKEN
 import dialog.AuthenticProductDialog
 import dialog.Gs1Field
 import dialog.ScanResult
 import dialog.inferBarcodeTypeFromRaw
 import dialog.parseScanResponse
+import features.app.resolver.DigitalLinkResolverScreen
+import resolver.parseDigitalLink
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import org.json.JSONArray
@@ -54,6 +64,21 @@ private fun scanModeLabel(verifyAuthenticity: Boolean, isMultiScan: Boolean): St
     verifyAuthenticity -> "VERIFY"
     else -> "SINGLE"
 }
+
+private val RATIFYE_DIGITAL_LINK = Regex(
+    """https?://[^\s"'<>\\]*dl\.ratifye\.ai[^\s"'<>\\]*""",
+    RegexOption.IGNORE_CASE,
+)
+
+/**
+ * Finds a Ratifye resolver URL inside a scanned value. The SDK sometimes hands
+ * back a JSON payload rather than the bare link, so the URL is matched out of
+ * whatever text arrives.
+ */
+private fun findRatifyeDigitalLink(vararg candidates: String): String? =
+    candidates.firstNotNullOfOrNull { candidate ->
+        RATIFYE_DIGITAL_LINK.find(candidate.replace("\\/", "/"))?.value
+    }
 
 private fun buildGs1FieldsFromTriple(gtin: String, serial: String, batch: String): List<Gs1Field> {
     val out = mutableListOf<Gs1Field>()
@@ -88,70 +113,132 @@ actual fun ScannerView(
     val fragmentManager =
         (context as androidx.fragment.app.FragmentActivity).supportFragmentManager
 
+    // The camera preview is laid out for portrait, so hold the activity there
+    // while the scanner is on screen and hand orientation back on the way out.
+    DisposableEffect(context) {
+        val activity = context as? Activity
+        val previousOrientation = activity?.requestedOrientation
+        activity?.requestedOrientation = ActivityInfo.SCREEN_ORIENTATION_PORTRAIT
+        onDispose {
+            activity?.requestedOrientation =
+                previousOrientation ?: ActivityInfo.SCREEN_ORIENTATION_UNSPECIFIED
+        }
+    }
+
     var controller by remember { mutableStateOf<ScannerController?>(null) }
     var scanDialogResult by remember { mutableStateOf<ScanResult?>(null) }
     var scanDialogRaw by remember { mutableStateOf("") }
     var showScanResultDialog by remember { mutableStateOf(false) }
+    var resolverUrl by remember { mutableStateOf<String?>(null) }
     var rawData by remember { mutableStateOf("") }
     var sdkScanError by remember { mutableStateOf<String?>(null) }
 
+    /** Maps whatever symbology name the SDK reports onto our own vocabulary. */
     fun normalizeBarcodeType(rawType: String): String {
-        val t = rawType.trim().uppercase()
+        val t = rawType.trim().uppercase().replace("-", "").replace("_", "").replace(" ", "")
         return when {
-            "128" in t || "CODE128" in t -> "CODE128"
-            "EAN13" in t || "EAN-13" in t -> "EAN13"
-            "EAN8" in t || "EAN-8" in t -> "EAN8"
-            "DATAMATRIX" in t || "DATA_MATRIX" in t -> "DATAMATRIX"
+            t.isEmpty() -> ""
+            "DATAMATRIX" in t -> "DATAMATRIX"
             "QR" in t -> "QR"
-            else -> "QR"
+            "PDF417" in t -> "PDF417"
+            "AZTEC" in t -> "AZTEC"
+            "MAXICODE" in t -> "MAXICODE"
+            "GS1128" in t -> "GS1128"
+            "CODE128" in t || t == "128" -> "CODE128"
+            "CODE39" in t -> "CODE39"
+            "CODE93" in t -> "CODE93"
+            "CODABAR" in t -> "CODABAR"
+            "ITF" in t || "INTERLEAVED" in t -> "ITF"
+            "EAN13" in t -> "EAN13"
+            "EAN8" in t -> "EAN8"
+            "UPCA" in t -> "UPCA"
+            "UPCE" in t -> "UPCE"
+            "DATABAR" in t || "RSS" in t -> "DATABAR"
+            else -> t
         }
+    }
+
+    /**
+     * Best-effort symbology when the SDK reports none. AIM identifiers are
+     * checked first, then the shape of the payload itself.
+     */
+    fun inferBarcodeType(value: String): String {
+        val trimmed = value.trim()
+        if (trimmed.isEmpty()) return ""
+        return when {
+            trimmed.contains("]Q", ignoreCase = false) -> "QR"
+            trimmed.contains("]d", ignoreCase = false) -> "DATAMATRIX"
+            trimmed.contains("]L", ignoreCase = false) -> "PDF417"
+            trimmed.contains("]z", ignoreCase = false) -> "AZTEC"
+            trimmed.contains("]C1") || trimmed.contains('\u001D') -> "GS1128"
+            trimmed.contains("]C") -> "CODE128"
+            trimmed.contains("]A") -> "CODE39"
+            trimmed.contains("]E0") -> "EAN13"
+            trimmed.startsWith("http", ignoreCase = true) -> "QR"
+            trimmed.contains("(01)") -> "GS1128"
+            trimmed.matches(Regex("""^\d{13}$""")) -> "EAN13"
+            trimmed.matches(Regex("""^\d{12}$""")) -> "UPCA"
+            trimmed.matches(Regex("""^\d{8}$""")) -> "EAN8"
+            trimmed.matches(Regex("""^\d{14}$""")) -> "ITF"
+            else -> "CODE128"
+        }
+    }
+
+    fun jsonStringField(node: JSONObject, vararg keys: String): String {
+        for (key in keys) {
+            val value = node.optString(key).trim()
+            if (value.isNotEmpty() && value != "null") return value
+        }
+        return ""
+    }
+
+    fun findJsonStringDeep(node: Any?, vararg keys: String): String {
+        when (node) {
+            is JSONObject -> {
+                val direct = jsonStringField(node, *keys)
+                if (direct.isNotEmpty()) return direct
+                val names = node.keys()
+                while (names.hasNext()) {
+                    val found = findJsonStringDeep(node.opt(names.next()), *keys)
+                    if (found.isNotEmpty()) return found
+                }
+            }
+            is JSONArray -> {
+                for (i in 0 until node.length()) {
+                    val found = findJsonStringDeep(node.opt(i), *keys)
+                    if (found.isNotEmpty()) return found
+                }
+            }
+        }
+        return ""
     }
 
     fun extractScanPayload(scannedValue: String): Pair<String, String> {
         val trimmed = scannedValue.trim()
         return try {
-            when {
-                trimmed.startsWith("[") -> {
-                    val arr = JSONArray(trimmed)
-                    if (arr.length() == 0) {
-                        "QR" to trimmed
-                    } else {
-                        val obj = arr.getJSONObject(0)
-                        val data = obj.optString("barcode_data")
-                            .ifBlank { obj.optString("data") }
-                            .ifBlank { obj.optString("raw") }
-                            .ifBlank { trimmed }
-                        val rawType = obj.optString("barcode_type")
-                            .ifBlank { obj.optString("format") }
-                            .ifBlank { obj.optString("symbology") }
-                            .ifBlank {
-                                if (data.startsWith("http", ignoreCase = true)) "QR" else "CODE128"
-                            }
-                        normalizeBarcodeType(rawType) to data
-                    }
-                }
-                trimmed.startsWith("{") -> {
-                    val obj = JSONObject(trimmed)
-                    val data = obj.optString("barcode_data")
-                        .ifBlank { obj.optString("data") }
-                        .ifBlank { obj.optString("raw") }
-                        .ifBlank { trimmed }
-                    val rawType = obj.optString("barcode_type")
-                        .ifBlank { obj.optString("format") }
-                        .ifBlank { obj.optString("symbology") }
-                        .ifBlank {
-                            if (data.startsWith("http", ignoreCase = true)) "QR" else "CODE128"
-                        }
-                    normalizeBarcodeType(rawType) to data
-                }
-                else -> {
-                    val inferredType = if (trimmed.startsWith("http", ignoreCase = true)) "QR" else "CODE128"
-                    inferredType to trimmed
-                }
+            val parsed: Any? = when {
+                trimmed.startsWith("[") -> JSONArray(trimmed)
+                trimmed.startsWith("{") -> JSONObject(trimmed)
+                else -> null
             }
-        } catch (_: Exception) {
-            val inferredType = if (trimmed.startsWith("http", ignoreCase = true)) "QR" else "CODE128"
-            inferredType to trimmed
+            if (parsed == null) {
+                inferBarcodeType(trimmed) to trimmed
+            } else {
+                val nestedData = findJsonStringDeep(parsed, "barcode_data", "data", "raw", "text")
+                val nestedType = findJsonStringDeep(parsed, "barcode_type", "format", "symbology", "type")
+                val link = findRatifyeDigitalLink(trimmed, nestedData)
+                val data = link ?: nestedData.ifBlank { trimmed }
+                val type = normalizeBarcodeType(nestedType).ifBlank { inferBarcodeType(data) }
+                Log.i(
+                    "GUEST_HISTORY",
+                    "extractScanPayload nestedType='$nestedType' resolvedType='$type' " +
+                        "nestedData='${nestedData.take(120)}' data='${data.take(120)}'",
+                )
+                type to data
+            }
+        } catch (e: Exception) {
+            Log.e("GUEST_HISTORY", "extractScanPayload failed: ${e.message}", e)
+            inferBarcodeType(trimmed) to trimmed
         }
     }
 
@@ -238,6 +325,11 @@ actual fun ScannerView(
         Regex("""/10/([^/?#]+)""").find(raw)?.groupValues?.getOrNull(1)?.let { batch = it }
         Regex("""/21/([^/?#]+)""").find(raw)?.groupValues?.getOrNull(1)?.let { serial = it }
 
+        // Query-style: ?01=…&10=…&21=…
+        if (gtin.isBlank()) Regex("""[?&]01=([^&#]+)""").find(raw)?.groupValues?.getOrNull(1)?.let { gtin = it }
+        if (batch.isBlank()) Regex("""[?&]10=([^&#]+)""").find(raw)?.groupValues?.getOrNull(1)?.let { batch = it }
+        if (serial.isBlank()) Regex("""[?&]21=([^&#]+)""").find(raw)?.groupValues?.getOrNull(1)?.let { serial = it }
+
         // Parenthesized: (01)<gtin>(10)<batch>(21)<serial>
         if (gtin.isBlank()) Regex("""\(01\)([^()]+)""").find(raw)?.groupValues?.getOrNull(1)?.let { gtin = it.trim() }
         if (batch.isBlank()) Regex("""\(10\)([^()]+)""").find(raw)?.groupValues?.getOrNull(1)?.let { batch = it.trim() }
@@ -245,6 +337,50 @@ actual fun ScannerView(
 
         return Triple(gtin, serial, batch)
     }
+
+    fun extractCompanyIdFromScan(scannedValue: String, raw: String): Int? {
+        val trimmed = scannedValue.trim()
+        val fromJson = runCatching {
+            fun fromObject(obj: JSONObject): Int? {
+                if (obj.optString("ai") == "97") {
+                    return obj.optString("value").filter { it.isDigit() }.toIntOrNull()
+                }
+                val gs1 = obj.optJSONObject("gs1_data")
+                val nested = gs1?.optJSONObject("97")?.optString("value")
+                    ?: gs1?.optString("97")
+                nested?.filter { it.isDigit() }?.toIntOrNull()?.takeIf { it > 0 }?.let { return it }
+                return null
+            }
+            when {
+                trimmed.startsWith("[") -> {
+                    val arr = JSONArray(trimmed)
+                    for (i in 0 until arr.length()) {
+                        val item = arr.optJSONObject(i) ?: continue
+                        fromObject(item)?.takeIf { it > 0 }?.let { return@runCatching it }
+                    }
+                    null
+                }
+                trimmed.startsWith("{") -> fromObject(JSONObject(trimmed))
+                else -> null
+            }
+        }.getOrNull()?.takeIf { it != null && it > 0 }
+        return fromJson
+            ?: AuditLogHelper.companyIdFromBarcode(scannedValue, raw)
+    }
+
+    fun gs1FromDigitalLink(url: String): Triple<String, String, String> {
+        if (!url.contains("dl.ratifye.ai", ignoreCase = true)) return Triple("", "", "")
+        return runCatching {
+            val parsed = parseDigitalLink(url)
+            val gtin = parsed.gtin.orEmpty()
+            val batch = parsed.data.identifiers.firstOrNull { it.code == "10" }?.value.orEmpty()
+            val serial = parsed.data.identifiers.firstOrNull { it.code == "21" }?.value.orEmpty()
+            Triple(gtin, serial, batch)
+        }.getOrElse { Triple("", "", "") }
+    }
+
+    fun firstFilled(vararg values: String): String =
+        values.firstOrNull { it.isNotBlank() }.orEmpty()
 
     fun presentParsedScanResult(raw: String, sdkJson: JSONArray?) {
         val jsonPayload: String = sdkJson?.toString().orEmpty().trim().let { j ->
@@ -300,7 +436,12 @@ actual fun ScannerView(
             )
         }
         scanDialogRaw = raw
-        showScanResultDialog = true
+        val digitalLink = findRatifyeDigitalLink(raw, scanDialogResult?.barcodeData.orEmpty())
+        if (digitalLink != null) {
+            resolverUrl = digitalLink
+        } else {
+            showScanResultDialog = true
+        }
     }
 
     suspend fun submitScanAuditLog(scannedValue: String, epcCandidate: String, mode: String) {
@@ -309,52 +450,78 @@ actual fun ScannerView(
             AUTH_TOKEN = sessionManager.getAccessToken()
             val loggedIn = sessionManager.isLoggedIn()
             val userId = sessionManager.getUserId() ?: 0
-            val companyId = AuditLogHelper.resolveCompanyId(sessionManager)
-            Log.i(tag, "[$mode] audit START loggedIn=$loggedIn userId=$userId companyId=$companyId hasToken=${!AUTH_TOKEN.isNullOrBlank()}")
-
             AppLocationCache.restoreFrom(sessionManager)
-            withTimeoutOrNull(4_000L) {
-                AppLocationCache.ensureFresh(locationProvider)
-                AppLocationCache.persistTo(sessionManager)
-            }
-            Log.i(
-                tag,
-                "[$mode] location lat=${AppLocationCache.latitude} lon=${AppLocationCache.longitude} geo=${AppLocationCache.geoLocation}",
-            )
+            withTimeoutOrNull(2_500) { AppLocationCache.ensureFresh(locationProvider) }
+            Log.e(tag, "[$mode] audit START loggedIn=$loggedIn userId=$userId hasToken=${!AUTH_TOKEN.isNullOrBlank()}")
 
             val (parsedGtin, parsedSerial, parsedBatch) = extractGs1Identifiers(scannedValue)
             val (urlGtin, urlSerial, urlBatch) = extractGs1IdentifiersFromUrl(epcCandidate)
-            val gtin = if (parsedGtin.isNotBlank()) parsedGtin else urlGtin
-            val serial = if (parsedSerial.isNotBlank()) parsedSerial else urlSerial
-            val batch = if (parsedBatch.isNotBlank()) parsedBatch else urlBatch
+            val payloadSource = if (epcCandidate.isNotBlank()) epcCandidate else scannedValue
+            val (barcodeType, barcodeData) = extractScanPayload(payloadSource)
+            val digitalLink = findRatifyeDigitalLink(scannedValue, epcCandidate, barcodeData)
+            val (linkGtin, linkSerial, linkBatch) = gs1FromDigitalLink(
+                firstFilled(digitalLink.orEmpty(), barcodeData, epcCandidate, scannedValue),
+            )
+            val (dGtin, dSerial, dBatch) = extractGs1IdentifiersFromUrl(digitalLink.orEmpty())
+            val gtin = firstFilled(
+                parsedGtin,
+                urlGtin,
+                linkGtin,
+                dGtin,
+                AuditLogHelper.gtinFromBarcode(scannedValue, epcCandidate, barcodeData, digitalLink.orEmpty()),
+            )
+            val serial = firstFilled(parsedSerial, urlSerial, linkSerial, dSerial)
+            val batch = firstFilled(parsedBatch, urlBatch, linkBatch, dBatch)
+            val gs1 = isGs1Barcode(
+                gtin = gtin,
+                serial = serial,
+                batch = batch,
+                barcodeType = barcodeType,
+                barcodeData = listOf(barcodeData, epcCandidate, scannedValue).joinToString(" "),
+            )
+            if (!gs1) {
+                Log.e(tag, "[$mode] skip barcode/create — not a GS1 barcode type=$barcodeType data=${barcodeData.take(120)}")
+                return
+            }
             val epcId = when {
-                gtin.isNotBlank() -> gtin
+                gtin.isNotBlank() -> sgtinEpcUrn(gtin, serial)
                 epcCandidate.isNotBlank() -> epcCandidate
                 else -> scannedValue.trim()
             }
-            val payloadSource = if (epcCandidate.isNotBlank()) epcCandidate else scannedValue
-            val (barcodeType, barcodeData) = extractScanPayload(payloadSource)
+            val signature = Regex("""(?:/98/|\(98\)|[?&]98=)([^/?#&()]+)""")
+                .find(epcCandidate + scannedValue)
+                ?.groupValues
+                ?.getOrNull(1)
 
             val isAuthFlow = mode.equals("VERIFY", ignoreCase = true) ||
                 mode.equals("AUTH", ignoreCase = true) ||
                 mode.equals("MULTI_AUTH", ignoreCase = true)
 
+            val companyFromCode = extractCompanyIdFromScan(scannedValue, epcCandidate)
+                ?: AuditLogHelper.companyIdFromBarcode(
+                    scannedValue,
+                    epcCandidate,
+                    barcodeData,
+                    digitalLink.orEmpty(),
+                )
             val scanRequest = AuditLogHelper.buildScanLogRequest(
                 sessionManager = sessionManager,
                 epcId = epcId,
                 barcodeType = barcodeType,
-                barcodeData = barcodeData,
+                barcodeData = digitalLink ?: barcodeData,
                 gtin = gtin,
                 serial = serial,
                 batch = batch,
                 isAuthFlow = isAuthFlow,
                 scannedValue = scannedValue,
+                signature = signature,
+                companyIdOverride = companyFromCode,
             )
 
-            Log.i(tag, "[$mode] POST body=${ScanAuditLog.formatRequestBody(scanRequest)}")
+            Log.e(tag, "[$mode] POST body=${ScanAuditLog.formatRequestBody(scanRequest)}")
             val result = AppRepository.sendScanCreateLog(scanRequest)
             if (result.isSuccess) {
-                Log.i(tag, "[$mode] audit OK epc_id=$epcId")
+            Log.e(tag, "[$mode] audit OK epc_id=$epcId gtin=${scanRequest.gtin} company=${scanRequest.company_id}")
             } else {
                 Log.e(tag, "[$mode] audit FAILED ${result.exceptionOrNull()?.message}", result.exceptionOrNull())
             }
@@ -364,12 +531,55 @@ actual fun ScannerView(
         }
     }
 
+    fun storeGuestScanLocally(scannedForLog: String, raw: String) {
+        val digitalLink = findRatifyeDigitalLink(raw, scannedForLog)
+        val (payloadType, payloadData) = extractScanPayload(scannedForLog)
+        val barcodeData = firstFilled(
+            digitalLink.orEmpty(),
+            raw.takeUnless { it.trim().startsWith("[") || it.trim().startsWith("{") }.orEmpty(),
+            payloadData.takeUnless { it.trim().startsWith("[") || it.trim().startsWith("{") }.orEmpty(),
+            payloadData,
+            raw,
+        )
+        val barcodeType = firstFilled(
+            payloadType.takeUnless { it == "CODE128" && barcodeData.startsWith("http", ignoreCase = true) }.orEmpty(),
+            if (barcodeData.startsWith("http", ignoreCase = true)) "QR" else "",
+            inferBarcodeType(barcodeData),
+        )
+        val (jGtin, jSerial, jBatch) = extractGs1Identifiers(scannedForLog)
+        val (rGtin, rSerial, rBatch) = extractGs1IdentifiersFromUrl(raw)
+        val (dGtin, dSerial, dBatch) = extractGs1IdentifiersFromUrl(barcodeData)
+        val (lGtin, lSerial, lBatch) = gs1FromDigitalLink(digitalLink.orEmpty().ifBlank { barcodeData })
+        val record = LocalScanRecord(
+            barcodeData = barcodeData,
+            barcodeType = barcodeType,
+            gtin = firstFilled(jGtin, lGtin, rGtin, dGtin),
+            serial = firstFilled(jSerial, lSerial, rSerial, dSerial),
+            batch = firstFilled(jBatch, lBatch, rBatch, dBatch),
+            timestamp = Clock.System.now().toEpochMilliseconds(),
+        )
+        Log.i(
+            "GUEST_HISTORY",
+            "SAVE rawLen=${raw.length} logLen=${scannedForLog.length} " +
+                "raw='${raw.take(180)}' log='${scannedForLog.take(180)}' " +
+                "link='$digitalLink' type='$barcodeType' data='${barcodeData.take(180)}' " +
+                "jsonGs1=($jGtin,$jSerial,$jBatch) urlGs1=($rGtin,$rSerial,$rBatch) " +
+                "dlGs1=($lGtin,$lSerial,$lBatch) stored=(${record.gtin},${record.serial},${record.batch})",
+        )
+        sessionManager.saveGuestScan(record)
+        Log.i("SCAN_DETAIL", "guest scan stored locally: ${barcodeData.take(80)}")
+    }
+
     fun handleScanFromSdk(raw: String, sdkJson: JSONArray?) {
         val jsonPayload = sdkJson?.toString().orEmpty()
         val scannedForLog = jsonPayload.trim().let { j ->
             if (j.isNotEmpty() && j != "null") j else raw
         }
         Log.d("SCAN_DETAIL", "========== SCAN [$scanMode] ========== rawLen=${raw.length}")
+
+        if (!sessionManager.isLoggedIn()) {
+            storeGuestScanLocally(scannedForLog, raw)
+        }
 
         scope.launch {
             launch(Dispatchers.IO) {
@@ -443,6 +653,22 @@ actual fun ScannerView(
             view
         }
     )
+
+    resolverUrl?.let { url ->
+        val closeResolver = {
+            resolverUrl = null
+            scanDialogResult = null
+        }
+        Dialog(
+            onDismissRequest = closeResolver,
+            properties = DialogProperties(usePlatformDefaultWidth = false),
+        ) {
+            DigitalLinkResolverScreen(
+                url = url,
+                modifier = Modifier.fillMaxSize(),
+            )
+        }
+    }
 
     if (showScanResultDialog) {
         scanDialogResult?.let { result ->

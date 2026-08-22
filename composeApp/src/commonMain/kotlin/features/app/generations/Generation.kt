@@ -26,7 +26,6 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
-import features.GuestSignInPromptDialog
 import navigation.AppScreen
 import navigation.appscreen.Screens
 
@@ -35,14 +34,11 @@ fun GenerateCodeScreen(
     onBack: () -> Unit,
     onNavigate: (String) -> Unit,
     onNavigateBarcode: (DynamicBarcodeType) -> Unit,
-    isGuestMode: Boolean = false,
     showBackButton: Boolean = true,
-    onSignInRequired: () -> Unit = {},
 ) {
     val sessionManager = remember { SessionManager(getLocalStorage()) }
     var selectedTab by remember { mutableStateOf(0) }
     var showLockedDialog by remember { mutableStateOf(false) }
-    var showGuestSignInDialog by remember { mutableStateOf(false) }
 
     val isMultiUrlIncluded = remember {
         val raw = sessionManager.getSubscriptionData().orEmpty()
@@ -182,11 +178,7 @@ fun GenerateCodeScreen(
                     primaryColor = primaryColor,
                     onClick = {
                         if (isLocked) {
-                            if (isGuestMode) {
-                                showGuestSignInDialog = true
-                            } else {
-                                showLockedDialog = true
-                            }
+                            showLockedDialog = true
                             return@OptionCard
                         }
 
@@ -238,17 +230,6 @@ fun GenerateCodeScreen(
             }
         )
     }
-
-    GuestSignInPromptDialog(
-        visible = showGuestSignInDialog,
-        onDismiss = { showGuestSignInDialog = false },
-        onSignIn = {
-            showGuestSignInDialog = false
-            onSignInRequired()
-        },
-        title = "Sign in required",
-        message = "Multi URL and premium generation features require an account. Sign in to continue.",
-    )
 }
 
 @Composable

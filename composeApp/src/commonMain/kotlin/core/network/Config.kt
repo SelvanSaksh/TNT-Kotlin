@@ -6,7 +6,7 @@ package network
  * use this URL over HTTPS. There is no local or staging override in the client.
  */
 object Config {
-    const val BASE_URL = "https://api.tnt.sakksh.com"
+    const val BASE_URL = "https://qa.api.ratifye.ai"
 
     /** Fallback company id for guest scan/generation audit when session has none. */
     const val DEFAULT_COMPANY_ID = 4

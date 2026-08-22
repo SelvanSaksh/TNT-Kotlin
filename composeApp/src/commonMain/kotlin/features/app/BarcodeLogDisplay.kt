@@ -5,6 +5,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import resolver.stripAuthAis97And98
 
 private fun JsonObject.nonBlankString(key: String): String? =
     this[key]?.jsonPrimitive?.contentOrNull?.takeIf { it.isNotBlank() }
@@ -14,11 +15,12 @@ private fun JsonObject.nonBlankString(key: String): String? =
  * and flat audit-log fields (`barcode_data`, `epc_id`).
  */
 fun JsonObject.barcodeLogDisplayTitle(): String {
-    this["details"]?.jsonObject?.nonBlankString("barcode")?.let { return it }
-    nonBlankString("barcode_data")?.let { return it }
-    nonBlankString("epc_id")?.let { return it }
-    nonBlankString("data")?.let { return it }
-    return "Unknown"
+    val raw = this["details"]?.jsonObject?.nonBlankString("barcode")
+        ?: nonBlankString("barcode_data")
+        ?: nonBlankString("epc_id")
+        ?: nonBlankString("data")
+        ?: return "Unknown"
+    return stripAuthAis97And98(raw).ifBlank { raw }
 }
 
 /**

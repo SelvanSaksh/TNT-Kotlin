@@ -16,7 +16,6 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import features.GuestSignInPromptDialog
 import navigation.AppScreen
 import navigation.appscreen.Screens
 import theme.White
@@ -33,12 +32,10 @@ expect fun ScannerView(
 fun Scans(
     onNavigate: (String) -> Unit,
     isGuestMode: Boolean = false,
-    onSignInRequired: () -> Unit = {},
 ) {
     var verifyAuthenticity by remember { mutableStateOf(!isGuestMode) }
     var isMultiScan by remember { mutableStateOf(false) }
     var showMoreSheet by remember { mutableStateOf(false) }
-    var showGuestAuthDialog by remember { mutableStateOf(false) }
 
     var currentScanMode by remember { mutableStateOf("VERIFY") }
 
@@ -226,12 +223,7 @@ fun Scans(
                     Switch(
                         checked = verifyAuthenticity,
                         onCheckedChange = { enabled ->
-                            if (isGuestMode && enabled) {
-                                showMoreSheet = false
-                                showGuestAuthDialog = true
-                            } else {
-                                verifyAuthenticity = enabled
-                            }
+                            verifyAuthenticity = enabled
                         },
                         enabled = !isGuestMode
                     )
@@ -241,17 +233,6 @@ fun Scans(
             }
         }
     }
-
-    GuestSignInPromptDialog(
-        visible = showGuestAuthDialog,
-        onDismiss = { showGuestAuthDialog = false },
-        onSignIn = {
-            showGuestAuthDialog = false
-            onSignInRequired()
-        },
-        title = "Sign in for authentication",
-        message = "Product authentication, picking, and packing require an account. Sign in to verify barcodes, or continue scanning without authentication.",
-    )
 }
 
 @Composable

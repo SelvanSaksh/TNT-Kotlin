@@ -27,6 +27,7 @@ object StorageKeys {
     const val CACHED_LON = "cached_lon"
     const val CACHED_GEO_LABEL = "cached_geo_label"
     const val GUEST_SCANNER_ID = "guest_scanner_id"
+    const val GUEST_SCAN_HISTORY = "guest_scan_history"
     const val USER_ROLE = "user_role"
     const val USER_MOBILE_MODULES = "user_mobile_modules"
     const val ACTIVE_WAREHOUSE_STAFF_ROLE = "active_warehouse_staff_role"
@@ -117,6 +118,45 @@ class SessionManager(private val storage: LocalStorage) {
         storage.saveString(StorageKeys.GUEST_SCANNER_ID, id)
     }
 
+    fun saveGuestScan(record: LocalScanRecord) {
+        val history = getGuestScanHistory().toMutableList()
+        history.add(0, record)
+        val encoded = json.encodeToString(history.take(MAX_GUEST_SCAN_HISTORY))
+        storage.saveString(StorageKeys.GUEST_SCAN_HISTORY, encoded)
+        println(
+            "GUEST_HISTORY: persisted count=${history.size.coerceAtMost(MAX_GUEST_SCAN_HISTORY)} " +
+                "type=${record.barcodeType} gtin=${record.gtin} batch=${record.batch} " +
+                "serial=${record.serial} data=${record.barcodeData.take(160)}",
+        )
+    }
+
+    fun getGuestScanHistory(): List<LocalScanRecord> {
+        val raw = storage.getString(StorageKeys.GUEST_SCAN_HISTORY)
+        if (raw.isNullOrBlank()) {
+            println("GUEST_HISTORY: load empty (no stored json)")
+            return emptyList()
+        }
+        return runCatching { json.decodeFromString<List<LocalScanRecord>>(raw) }
+            .onSuccess { records ->
+                println("GUEST_HISTORY: load count=${records.size} jsonLen=${raw.length}")
+                records.take(5).forEachIndexed { index, record ->
+                    println(
+                        "GUEST_HISTORY: row[$index] type='${record.barcodeType}' " +
+                            "gtin='${record.gtin}' batch='${record.batch}' serial='${record.serial}' " +
+                            "data='${record.barcodeData.take(160)}'",
+                    )
+                }
+            }
+            .onFailure { error ->
+                println("GUEST_HISTORY: decode FAILED ${error.message} json='${raw.take(300)}'")
+            }
+            .getOrElse { emptyList() }
+    }
+
+    fun clearGuestScanHistory() {
+        storage.remove(StorageKeys.GUEST_SCAN_HISTORY)
+    }
+
     fun saveUserRole(role: Int) {
         storage.saveString(StorageKeys.USER_ROLE, role.toString())
     }
@@ -158,7 +198,21 @@ class SessionManager(private val storage: LocalStorage) {
 
     /** Guest / explore mode — no completed sign-in session. */
     fun isGuestUser(): Boolean = !isLoggedIn()
+
+    companion object {
+        private const val MAX_GUEST_SCAN_HISTORY = 200
+    }
 }
+
+@Serializable
+data class LocalScanRecord(
+    val barcodeData: String = "",
+    val barcodeType: String = "",
+    val gtin: String = "",
+    val serial: String = "",
+    val batch: String = "",
+    val timestamp: Long = 0,
+)
 
 /** Sign-in prompt shown once per cold start when entering guest shell. */
 object GuestPromptState {
