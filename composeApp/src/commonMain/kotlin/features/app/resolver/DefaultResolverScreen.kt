@@ -24,6 +24,7 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.LocationOn
 import androidx.compose.material.icons.filled.ShoppingBag
 import androidx.compose.material.icons.filled.ShowChart
 import androidx.compose.material.icons.filled.Warning
@@ -33,16 +34,17 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
-import coil3.compose.AsyncImage
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil3.compose.AsyncImage
 import resolver.ResolverScreenState
 import utils.openGeneratedPdf
 import utils.openUrl
@@ -57,10 +59,6 @@ private val Muted = Color(0xFF6B7C8F)
 private val Line = Color(0xFFE2E8F0)
 private val AuthRed = Color(0xFFEF4444)
 
-/**
- * Default consumer template used when the CMS page API has no layout for the
- * scanned GTIN. Copy comes from `/productmaster/details/by-gtin`.
- */
 @Composable
 fun DefaultResolverScreen(
     state: ResolverScreenState,
@@ -100,64 +98,35 @@ fun DefaultResolverScreen(
         )
 
         Column(modifier = Modifier.padding(horizontal = 20.dp, vertical = 20.dp)) {
-            if (template.detailRows.isNotEmpty()) {
-                SectionTitle("Product Details")
-                DetailCard(rows = template.detailRows)
-                Spacer(modifier = Modifier.height(12.dp))
+            if (template.identifierRows.isNotEmpty()) {
+                SectionTitle("Product Identifiers")
+                IdentifierCard(rows = template.identifierRows)
+                Spacer(modifier = Modifier.height(20.dp))
             }
-            ChipRow(
+
+            if (template.chain.isNotEmpty()) {
+                SectionTitle("Distribution Path")
+                DistributionChain(steps = template.chain)
+                Spacer(modifier = Modifier.height(20.dp))
+            }
+
+            SectionTitle("Track & Trace")
+            StatChipsRow(
                 timesScanned = template.timesScanned,
                 location = location,
                 regionMatch = if (genuine) template.regionMatch else false,
             )
-        }
 
-        Column(modifier = Modifier.padding(horizontal = 20.dp)) {
-            SectionTitle("Quick Actions")
-            ActionGrid(
-                brandLabel = template.brandActionLabel,
-                website = template.website,
-                onViewReport = {
-                    val batch = state.scanBatch?.takeIf { it.isNotBlank() } ?: "scan"
-                    openGeneratedPdf(
-                        fileName = "Ratifye-Diversion-Report-$batch.pdf",
-                        title = "Ratifye Diversion Report",
-                        lines = listOf(
-                            template.productName,
-                            template.brandLine,
-                            "GTIN: $gtin",
-                            "Serial: $serial",
-                            "Scan location: $location",
-                            "Authorised location: ${state.expectedLocationLabel ?: "—"}",
-                            template.regionBody,
-                        ),
-                    )
-                },
+            ScannedLocationsCard(
+                authorisedLocation = template.authorisedLocation,
+                timesScanned = template.timesScanned,
+                scans = template.scans,
             )
-        }
-
-        if (template.related.isNotEmpty()) {
-            Column(modifier = Modifier.padding(start = 20.dp, top = 20.dp)) {
-                SectionTitle("You May Also Need")
-                Row(
-                    modifier = Modifier
-                        .fillMaxWidth()
-                        .horizontalScroll(rememberScrollState()),
-                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                ) {
-                    template.related.forEach { product ->
-                        RelatedCard(product)
-                    }
-                    Spacer(modifier = Modifier.width(10.dp))
-                }
-            }
         }
 
         if (template.regionMatch == false) {
             DiversionBand(body = template.regionBody)
         }
-
-        TraceCard(steps = template.trace)
 
         Row(
             modifier = Modifier
@@ -200,6 +169,7 @@ private fun PackCard(
             .clip(RoundedCornerShape(16.dp))
             .background(Card)
             .border(1.dp, Line, RoundedCornerShape(16.dp))
+            .shadow(8.dp, RoundedCornerShape(16.dp))
             .padding(14.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -270,42 +240,141 @@ private fun SectionTitle(text: String) {
 }
 
 @Composable
-private fun DetailCard(rows: List<Pair<String, String>>) {
+private fun IdentifierCard(rows: List<DefaultIdentifierRow>) {
     Column(
         modifier = Modifier
             .fillMaxWidth()
             .clip(RoundedCornerShape(14.dp))
             .background(Card)
-            .border(1.dp, Line, RoundedCornerShape(14.dp))
-            .padding(horizontal = 14.dp),
+            .border(1.dp, Line, RoundedCornerShape(14.dp)),
     ) {
-        rows.forEachIndexed { index, (label, value) ->
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(vertical = 11.dp),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically,
-            ) {
-                Text(text = label, fontSize = 12.sp, fontWeight = FontWeight.SemiBold, color = Muted)
-                Text(
-                    text = value,
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = Ink,
-                    textAlign = TextAlign.End,
-                    modifier = Modifier.padding(start = 12.dp).weight(1f, fill = false),
-                )
+        val chunked = rows.chunked(2)
+        chunked.forEach { rowPair ->
+            Row(modifier = Modifier.fillMaxWidth()) {
+                rowPair.forEachIndexed { index, row ->
+                    Column(
+                        modifier = Modifier
+                            .weight(1f)
+                            .background(Card)
+                            .padding(horizontal = 14.dp, vertical = 10.dp),
+                    ) {
+                        Text(
+                            text = row.label.uppercase(),
+                            fontSize = 9.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 0.5.sp,
+                            color = Color(0xFF8A9AAC),
+                        )
+                        Text(
+                            text = row.value,
+                            fontSize = if (row.mono) 11.5.sp else 12.5.sp,
+                            fontWeight = if (row.mono) FontWeight.SemiBold else FontWeight.ExtraBold,
+                            fontFamily = if (row.mono) androidx.compose.ui.text.font.FontFamily.Monospace else androidx.compose.ui.text.font.FontFamily.Default,
+                            letterSpacing = if (row.mono) 0.2.sp else 0.sp,
+                            color = if (row.mono) Navy else Ink,
+                            modifier = if (row.mono) Modifier else Modifier,
+                        )
+                    }
+                    if (index == 0 && rowPair.size == 1) {
+                        Spacer(modifier = Modifier.weight(1f))
+                    }
+                    if (index < rowPair.size - 1) {
+                        Box(
+                            modifier = Modifier
+                                .width(1.dp)
+                                .fillMaxWidth()
+                                .background(Color(0xFFEDF1F6)),
+                        )
+                    }
+                }
             }
-            if (index != rows.lastIndex) {
-                Box(modifier = Modifier.fillMaxWidth().height(1.dp).background(Color(0xFFF1F5F9)))
+            if (rowPair != chunked.lastOrNull()) {
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(1.dp)
+                        .background(Color(0xFFEDF1F6)),
+                )
             }
         }
     }
 }
 
 @Composable
-private fun ChipRow(timesScanned: String, location: String, regionMatch: Boolean?) {
+private fun DistributionChain(steps: List<DefaultChainStep>) {
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clip(RoundedCornerShape(14.dp))
+            .background(NavyDeep)
+            .padding(15.dp),
+    ) {
+        steps.forEachIndexed { index, step ->
+            val last = index == steps.lastIndex
+            val iconVector = when (step.icon) {
+                DefaultChainIcon.FACTORY -> Icons.Default.Warning
+                DefaultChainIcon.WAREHOUSE -> Icons.Default.Warning
+                DefaultChainIcon.DISTRIBUTOR -> Icons.Default.ShowChart
+                DefaultChainIcon.RETAIL -> Icons.Default.ShoppingBag
+                DefaultChainIcon.ALERT -> Icons.Default.Warning
+            }
+
+            Row(
+                modifier = Modifier.padding(bottom = if (last) 0.dp else 18.dp),
+                horizontalArrangement = Arrangement.spacedBy(10.dp),
+            ) {
+                Box(
+                    modifier = Modifier
+                        .padding(top = 3.dp)
+                        .size(20.dp)
+                        .clip(CircleShape)
+                        .background(if (step.flagged) AuthRed else Green),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Icon(
+                        imageVector = iconVector,
+                        contentDescription = null,
+                        tint = Color.White,
+                        modifier = Modifier.size(11.dp),
+                    )
+                }
+                Column {
+                    Text(
+                        text = step.label,
+                        fontSize = 11.5.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = if (step.flagged) Color(0xFFFECACA) else Color.White,
+                    )
+                    Text(
+                        text = step.subtitle,
+                        fontSize = 9.5.sp,
+                        lineHeight = 14.sp,
+                        color = if (step.flagged) Color(0xFFFCA5A5) else Color(0xFF8DB1CF),
+                    )
+                    step.note?.let { note ->
+                        val noteBg = if (note.startsWith("Within")) Color(0xFF22C55E).copy(alpha = 0.15f) else AuthRed.copy(alpha = 0.15f)
+                        val noteColor = if (note.startsWith("Within")) Color(0xFF8EE6AC) else Color(0xFFFCA5A5)
+                        Text(
+                            text = note,
+                            fontSize = 8.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 0.4.sp,
+                            color = noteColor,
+                            modifier = Modifier
+                                .padding(top = 4.dp)
+                                .clip(RoundedCornerShape(4.dp))
+                                .background(noteBg)
+                                .padding(horizontal = 6.dp, vertical = 2.dp),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun StatChipsRow(timesScanned: String, location: String, regionMatch: Boolean?) {
     val regionValue = when (regionMatch) {
         true -> "✓"
         false -> "✕"
@@ -316,13 +385,21 @@ private fun ChipRow(timesScanned: String, location: String, regionMatch: Boolean
         horizontalArrangement = Arrangement.spacedBy(8.dp),
     ) {
         StatChip(
+            value = timesScanned,
+            label = "Times Scanned",
+            modifier = Modifier.weight(1f),
+        )
+        StatChip(
             value = regionValue,
             label = "Region Match",
             modifier = Modifier.weight(1f),
             alert = regionMatch == false,
         )
-        StatChip(timesScanned, "Times Scanned", Modifier.weight(1f))
-        StatChip(location, "Scan Location", Modifier.weight(1f))
+        StatChip(
+            value = location,
+            label = "Latest Scan",
+            modifier = Modifier.weight(1f),
+        )
     }
 }
 
@@ -356,6 +433,99 @@ private fun StatChip(
             letterSpacing = 0.3.sp,
             textAlign = TextAlign.Center,
         )
+    }
+}
+
+@Composable
+private fun ScannedLocationsCard(
+    authorisedLocation: String,
+    timesScanned: String,
+    scans: List<DefaultTraceStep>,
+) {
+    if (scans.isEmpty()) return
+
+    Column(
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 14.dp)
+            .clip(RoundedCornerShape(14.dp))
+            .background(NavyDeep)
+            .padding(15.dp),
+    ) {
+        Text(
+            text = "SCANNED LOCATIONS",
+            fontSize = 11.sp,
+            fontWeight = FontWeight.ExtraBold,
+            letterSpacing = 0.6.sp,
+            color = Color(0xFF8DB1CF),
+            modifier = Modifier.padding(bottom = 12.dp),
+        )
+
+        Row(
+            modifier = Modifier.fillMaxWidth(),
+            horizontalArrangement = Arrangement.spacedBy(10.dp),
+        ) {
+            Box(
+                modifier = Modifier
+                    .padding(top = 3.dp)
+                    .size(20.dp)
+                    .clip(CircleShape)
+                    .background(Color(0xFF1F7A9E)),
+                contentAlignment = Alignment.Center,
+            ) {
+                Icon(
+                    imageVector = Icons.Default.LocationOn,
+                    contentDescription = null,
+                    tint = Color.White,
+                    modifier = Modifier.size(11.dp),
+                )
+            }
+            Column {
+                Text(
+                    text = if (authorisedLocation.isNotBlank()) "Authorised · $authorisedLocation" else "Authorised zone",
+                    fontSize = 11.5.sp,
+                    fontWeight = FontWeight.Bold,
+                    color = Color.White,
+                )
+                Text(
+                    text = if (timesScanned == "0") "No scans recorded yet" else "$timesScanned scan${if (timesScanned == "1") "" else "s"} recorded",
+                    fontSize = 9.5.sp,
+                    color = Color(0xFF8DB1CF),
+                )
+            }
+        }
+
+        Spacer(modifier = Modifier.height(8.dp))
+
+        Column {
+            scans.forEachIndexed { index, scan ->
+                Row(
+                    modifier = Modifier.padding(bottom = if (index == scans.lastIndex) 0.dp else 10.dp),
+                    horizontalArrangement = Arrangement.spacedBy(10.dp),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .padding(top = 3.dp)
+                            .size(9.dp)
+                            .clip(CircleShape)
+                            .background(if (scan.flagged) Color(0xFFF87171) else Green),
+                    )
+                    Column {
+                        Text(
+                            text = scan.title,
+                            fontSize = 11.5.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = if (scan.flagged) Color(0xFFFECACA) else Color.White,
+                        )
+                        Text(
+                            text = scan.subtitle,
+                            fontSize = 9.5.sp,
+                            color = if (scan.flagged) Color(0xFFFCA5A5) else Color(0xFF8DB1CF),
+                        )
+                    }
+                }
+            }
+        }
     }
 }
 
@@ -440,55 +610,6 @@ private fun ActionBtn(
             textAlign = TextAlign.Center,
             lineHeight = 14.sp,
         )
-    }
-}
-
-@Composable
-private fun RelatedCard(product: DefaultRelatedProduct) {
-    Column(
-        modifier = Modifier
-            .width(118.dp)
-            .clip(RoundedCornerShape(13.dp))
-            .background(Card)
-            .border(1.dp, Line, RoundedCornerShape(13.dp))
-            .padding(10.dp),
-    ) {
-        Box(
-            modifier = Modifier
-                .fillMaxWidth()
-                .height(70.dp)
-                .clip(RoundedCornerShape(9.dp))
-                .background(Color(0xFFF8FAFC))
-                .border(1.dp, Line, RoundedCornerShape(9.dp)),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (product.imageUrl != null) {
-                AsyncImage(
-                    model = product.imageUrl,
-                    contentDescription = product.name,
-                    contentScale = ContentScale.Crop,
-                    modifier = Modifier.fillMaxSize(),
-                )
-            } else {
-                Text(
-                    text = product.name.take(1),
-                    fontSize = 22.sp,
-                    fontWeight = FontWeight.Black,
-                    color = Navy,
-                )
-            }
-        }
-        Text(
-            text = product.name,
-            fontSize = 10.5.sp,
-            fontWeight = FontWeight.ExtraBold,
-            color = Ink,
-            lineHeight = 14.sp,
-            modifier = Modifier.padding(top = 8.dp),
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-        )
-        Text(text = product.subtitle, fontSize = 9.sp, color = Muted, modifier = Modifier.padding(top = 2.dp))
     }
 }
 

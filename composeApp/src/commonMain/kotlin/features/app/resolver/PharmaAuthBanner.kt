@@ -61,7 +61,7 @@ private fun customBannerText(value: String?, stock: Set<String>): String? {
 }
 
 /**
- * Canonical authenticity hero: pharma navy, fixed 78px icon, CMS copy when present.
+ * Canonical authenticity hero: pharma navy, fixed 52px icon ring, CMS copy when present.
  */
 @Composable
 fun PharmaAuthBanner(
@@ -77,9 +77,6 @@ fun PharmaAuthBanner(
 ) {
     val pending = verifying || !hasVerdict
     val failed = !pending && !genuine
-    val top = if (failed) Color(0xFFBE123C) else PharmaAuthNavyMid
-    val mid = if (failed) PharmaAuthFail else PharmaAuthNavy
-    val deep = if (failed) Color(0xFF4C0519) else PharmaAuthNavyDeep
     val maker = manufacturer.trim().ifBlank { "the manufacturer" }
 
     val heading = when {
@@ -122,42 +119,23 @@ fun PharmaAuthBanner(
     Column(
         modifier = modifier
             .fillMaxWidth()
-            .background(Brush.verticalGradient(listOf(top, mid, deep)))
+            .background(
+                Brush.verticalGradient(
+                    listOf(
+                        if (failed) Color(0xFFBE123C) else PharmaAuthNavyMid,
+                        if (failed) PharmaAuthFail else PharmaAuthNavy,
+                        if (failed) Color(0xFF4C0519) else PharmaAuthNavyDeep,
+                    ),
+                ),
+            )
             .statusBarsPadding()
-            .padding(start = 12.dp, end = 12.dp, top = 12.dp, bottom = 30.dp),
+            .padding(start = 14.dp, end = 14.dp, top = 6.dp, bottom = 20.dp),
     ) {
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+        if (badge != null) {
             Row(
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(7.dp),
-                modifier = Modifier.weight(1f, fill = false),
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.End,
             ) {
-                Box(
-                    modifier = Modifier
-                        .size(7.dp)
-                        .clip(CircleShape)
-                        .background(
-                            when {
-                                failed -> PharmaRed
-                                pending -> PharmaAmber
-                                else -> PharmaGreen
-                            },
-                        ),
-                )
-                Text(
-                    text = statusLabel,
-                    fontSize = 13.sp,
-                    fontWeight = FontWeight.ExtraBold,
-                    color = Color.White,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis,
-                )
-            }
-            if (!badge.isNullOrBlank()) {
                 Text(
                     text = badge,
                     fontSize = 9.5.sp,
@@ -172,14 +150,12 @@ fun PharmaAuthBanner(
         }
 
         Column(
-            modifier = Modifier
-                .fillMaxWidth()
-                .padding(top = 16.dp, bottom = 4.dp),
+            modifier = Modifier.fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Box(
                 modifier = Modifier
-                    .size(78.dp)
+                    .size(52.dp)
                     .clip(CircleShape)
                     .background(
                         when {
@@ -192,7 +168,7 @@ fun PharmaAuthBanner(
             ) {
                 Box(
                     modifier = Modifier
-                        .size(58.dp)
+                        .size(38.dp)
                         .clip(CircleShape)
                         .background(
                             Brush.linearGradient(
@@ -213,25 +189,30 @@ fun PharmaAuthBanner(
                         },
                         contentDescription = null,
                         tint = Color.White,
-                        modifier = Modifier.size(if (pending) 24.dp else 26.dp),
+                        modifier = Modifier.size(if (pending) 17.dp else 18.dp),
                     )
                 }
             }
-            Spacer(modifier = Modifier.height(12.dp))
+            Spacer(modifier = Modifier.height(8.dp))
             Text(
                 text = heading,
-                fontSize = 19.sp,
+                fontSize = 24.sp,
                 fontWeight = FontWeight.ExtraBold,
                 color = Color.White,
                 textAlign = TextAlign.Center,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
             )
+            Spacer(modifier = Modifier.height(2.dp))
             Text(
                 text = subtitle,
-                fontSize = 11.5.sp,
-                lineHeight = 17.sp,
+                fontSize = 13.5.sp,
+                lineHeight = 19.sp,
                 color = Color(0xFFBCD3E8),
                 textAlign = TextAlign.Center,
-                modifier = Modifier.padding(horizontal = 18.dp, vertical = 5.dp),
+                maxLines = 2,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.padding(horizontal = 4.dp),
             )
         }
     }

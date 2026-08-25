@@ -1,0 +1,33 @@
+﻿Initialized native services in: C:\Users\mutha_rx3lv8e\.gradle\native
+Initialized jansi services in: C:\Users\mutha_rx3lv8e\.gradle\native
+The client will now receive all logging from the daemon (pid: 32580). The daemon log file: C:\Users\mutha_rx3lv8e\.gradle\daemon\8.14.5\daemon-32580.out.log
+Starting 6th build in daemon [uptime: 10 mins 11.457 secs, performance: 99%, GC rate: 0.00/s, heap usage: 0% of 4 GiB]
+Using 8 worker leases.
+Calculating task graph as no cached configuration is available for tasks: :composeApp:installDebug
+Now considering [D:\schoofi\TNT-Kotlin] as hierarchies to watch
+Watching the file system is configured to be enabled if available
+File system watching is active
+Starting Build
+Caching disabled for Kotlin DSL script compilation (Settings/TopLevel/stage1) because:
+  Build cache is disabled
+.\gradlew.bat : 
+At line:1 char:65
++ ... tudio\jbr"; .\gradlew.bat :composeApp:installDebug --info 2>&1 | Out- ...
++                 ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+FAILURE: Build failed with an exception.
+
+* What went wrong:
+25.0.2
+
+* Try:
+> Run with --stacktrace option to get the stack trace.
+> Run with --debug option to get more log output.
+> Run with --scan to get full insights.
+> Get more help at https://help.gradle.org.
+
+BUILD FAILED in 3s
+Watched directory hierarchies: [D:\schoofi\TNT-Kotlin]
+Configuration cache entry stored.

@@ -290,8 +290,13 @@ class ResolverScreenState(private val url: String) {
             scanMfg = scanMfg,
             scanExpiry = scanExpiry,
             deviceCity = currentAddress?.city,
+            deviceAddress = currentAddress?.let {
+                listOf(it.city, it.state).filter { part -> part.isNotBlank() }.joinToString(", ")
+            },
             locationMatched = isLocationMatched,
             expectedLocation = expectedLocationLabel,
+            gtin = gtin,
+            serial = scanSerial,
         )
 
     private val detailsInvoice: JsonObject? get() = cmsDict(productDetails?.get("invoiceDetails"))
