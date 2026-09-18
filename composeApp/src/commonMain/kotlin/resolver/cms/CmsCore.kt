@@ -218,6 +218,7 @@ enum class CmsWidgetType(val wire: String) {
     BRAND_LOGO("brand_logo"),
     BANNER("banner"),
     PACK_CARD("pack_card"),
+    FIELD_GRID("field_grid"),
     TITLE("title"),
     HEADING("heading"),
     PRICE_ROW("price_row"),
@@ -260,6 +261,10 @@ val CmsWidgetType.isImage: Boolean
 val CmsWidgetType.isBrandLogo: Boolean get() = this == CmsWidgetType.BRAND_LOGO
 
 val CmsWidgetType.isBanner: Boolean get() = this == CmsWidgetType.BANNER
+
+val CmsWidgetType.isPackCard: Boolean get() = this == CmsWidgetType.PACK_CARD
+
+val CmsWidgetType.isFieldGrid: Boolean get() = this == CmsWidgetType.FIELD_GRID
 
 val CmsWidgetType.isTitle: Boolean
     get() = this == CmsWidgetType.TITLE || this == CmsWidgetType.HEADING
@@ -381,6 +386,8 @@ data class ResolverCmsPage(
     val name: String?,
     val companyId: String?,
     val gtin: String?,
+    val linkType: String?,
+    val match: String?,
     val content: ResolverCmsContent?,
 )
 
@@ -463,6 +470,8 @@ private fun parsePage(dict: JsonObject): ResolverCmsPage {
         companyId = cmsString(dict["company_id"]),
         gtin = cmsString(dict["gtin"])
             ?: contentDict?.let { cmsString(cmsDict(it["meta"])?.get("gtin")) },
+        linkType = cmsString(dict["link_type"]),
+        match = cmsString(dict["match"]),
         content = contentDict?.let { parseContent(it) },
     )
 }
@@ -845,4 +854,35 @@ fun shouldShowComponent(component: ResolverCmsComponent, isAuthenticated: Boolea
 fun isAuthenticQuality(quality: String?): Boolean {
     if (quality.isNullOrBlank()) return false
     return quality.trim().lowercase() in setOf("real", "original", "authentic")
+}
+
+// MARK: - Placeholder stripping
+
+private val CMS_PLACEHOLDERS = setOf(
+    "\u2014", "-", "\u2013", "n/a", "na", "tbd",
+    "product name", "product title", "brand", "brand name",
+    "batch", "batch no.", "serial", "manufacturer", "value",
+)
+
+private val GS1_AI_HINT = Regex("""^\(\d{2,4}\)$""")
+
+/** Drops the sample copy the page builder ships with so real scan/product data can take its place. */
+fun cmsRealValue(any: JsonElement?): String? {
+    val raw = cmsDisplayString(any).trim()
+    if (raw.isEmpty()) return null
+    val lower = raw.lowercase()
+    if (lower in CMS_PLACEHOLDERS) return null
+    if (GS1_AI_HINT.containsMatchIn(raw)) return null
+    return raw
+}
+
+// MARK: - Page assignment check
+
+/** True when the page was linked by product / category / brand rather than by GTIN. */
+fun cmsIsAssignedPage(page: ResolverCmsPage?): Boolean {
+    if (page == null) return false
+    val match = page.match
+    if (!match.isNullOrBlank() && match != "gtin") return true
+    val lt = (page.linkType ?: "").lowercase()
+    return lt == "product" || lt == "category" || lt == "brand"
 }

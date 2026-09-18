@@ -1,5 +1,9 @@
 package features.app.resolver
 
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -16,8 +20,11 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.sizeIn
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Description
+import androidx.compose.material.icons.filled.ExpandMore
 import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
@@ -29,7 +36,9 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -46,7 +55,6 @@ import resolver.cms.ResolverCmsTheme
 import resolver.cms.cmsCurrency
 import resolver.cms.cmsDisplayString
 import resolver.cms.cmsDouble
-import resolver.cms.cmsInt
 import resolver.cms.cmsLinkURL
 import resolver.cms.cmsMakeURL
 import resolver.cms.cmsProductDisplayName
@@ -63,10 +71,12 @@ import resolver.cms.isCoupon
 import resolver.cms.isDescription
 import resolver.cms.isDivider
 import resolver.cms.isFeatureChips
+import resolver.cms.isFieldGrid
 import resolver.cms.isFooter
 import resolver.cms.isImage
 import resolver.cms.isLink
 import resolver.cms.isOffer
+import resolver.cms.isPackCard
 import resolver.cms.isPdfViewer
 import resolver.cms.isPrice
 import resolver.cms.isRating
@@ -75,6 +85,7 @@ import resolver.cms.isSocialLinks
 import resolver.cms.isTimeline
 import resolver.cms.isTitle
 import resolver.cms.isYouTube
+import resolver.cms.cmsRealValue
 import utils.openUrl
 
 internal val AUTH_RED = Color(0xFFDB3838)
@@ -91,7 +102,14 @@ data class CmsRenderContext(
     val theme: ResolverCmsTheme?,
     val accent: Color,
     val isGenuine: Boolean,
-)
+    val isAuthLoading: Boolean = false,
+    val authQuality: String? = null,
+    val scan: CmsScanContext = CmsScanContext(),
+) {
+    /** False when the auth call produced no verdict (error / empty response). */
+    val hasAuthVerdict: Boolean
+        get() = !authQuality.isNullOrBlank()
+}
 
 /** `#RGB`, `#RRGGBB` and CSS `#RRGGBBAA` into a Compose colour. */
 fun parseCmsColor(raw: String?): Color? {
@@ -155,20 +173,44 @@ fun CmsComponentView(
         )
 
         type.isBrandLogo -> CmsBrandLogo(component, context, modifier)
-        type.isBanner -> PharmaAuthBanner(
-            verifying = false,
-            genuine = context.isGenuine,
-            hasVerdict = true,
-            manufacturer = cmsDisplayString(cmsResolve("product.companyName", context.root))
-                .ifBlank { cmsDisplayString(cmsResolve("product.brandName", context.root)) }
-                .ifBlank { "the manufacturer" },
-            cmsTitle = cmsDisplayString(component.prop("title", context.root)).takeIf { it.isNotBlank() },
-            cmsSubtitle = cmsDisplayString(component.prop("subtitle", context.root)).takeIf { it.isNotBlank() },
-            brandLine = cmsDisplayString(component.prop("brand", context.root)).takeIf { it.isNotBlank() },
-            badge = cmsDisplayString(component.prop("badge", context.root)).takeIf { it.isNotBlank() },
-            modifier = modifier,
-        )
-        type.isTitle -> CmsTitle(component, context, modifier)
+        type.isBanner -> CmsBanner(component, context, modifier)
+        type.isPackCard -> CmsPackCard(component, context, modifier)
+        type.isFieldGrid -> CmsFieldGrid(component, context, modifier)
+        type.isTitle -> {
+            if (placement == "section") {
+                CmsSectionTitle(
+                    text = cmsRealValue(component.prop("title", context.root))
+                        ?: component.name?.trim().orEmpty(),
+                    modifier = modifier,
+                )
+            } else {
+                CmsTitle(component, context, modifier)
+            }
+        }
+        type.isTimeline -> {
+            if (placement == "section") {
+                val label = listOf(
+                    component.name.orEmpty(),
+                    cmsDisplayString(component.props["title"]).orEmpty(),
+                ).joinToString(" ")
+                val scanLike = Regex("scan|trail|trace|location", RegexOption.IGNORE_CASE) in label
+                val pathLike = Regex("supply|distribut|path|chain|journey", RegexOption.IGNORE_CASE) in label
+                when {
+                    scanLike -> CmsScanTreeCard(component, context, modifier)
+                    pathLike -> CmsDistributionPathCard(component, context, modifier)
+                    else -> CmsTimeline(component, context, modifier)
+                }
+            } else {
+                CmsTimeline(component, context, modifier)
+            }
+        }
+        type.isFeatureChips -> {
+            if (placement == "section" && !cmsChipsHaveLinks(component, context.root)) {
+                CmsStatChipsRow(component, context, modifier)
+            } else {
+                CmsFeatureChips(component, context, modifier)
+            }
+        }
         type.isPrice -> CmsPrice(component, context, modifier)
         type.isDescription -> CmsDescription(component, context, modifier)
         type.isLink -> CmsLink(component, context, modifier)
@@ -386,6 +428,7 @@ fun CmsDescription(
     modifier: Modifier = Modifier,
 ) {
     var expanded by remember { mutableStateOf(false) }
+    val rotation by animateFloatAsState(if (expanded) 180f else 0f, label = "descChevron")
     val style = cmsStyle(component.styles, "#595f73")
     // Widget copy wins over `product.*` guesses; only an explicit binding overrides it.
     val text = component.bindings["text"]
@@ -395,36 +438,114 @@ fun CmsDescription(
         .ifBlank { cmsDisplayString(cmsResolve("product.description", context.root)) }
     if (text.isBlank()) return
 
-    val truncate = cmsInt(component.props["truncate"]) ?: 0
     val sectionTitle = when (component.widgetType) {
         CmsWidgetType.PRODUCT_DESCRIPTION, CmsWidgetType.DESCRIPTION -> "Product Description"
         else -> component.name?.trim()?.takeIf { it.isNotEmpty() }
     }
+    val cardRadius = (if (style.radius > 0) style.radius else 16.0).dp
+    val bodySize = (if (style.fontSize > 0) style.fontSize else 13.5).sp
+    val bodyColor = parseCmsColor(style.color) ?: Color(0xFF475569)
 
     Column(
-        modifier = modifier.fillMaxWidth().cmsChrome(style),
-        verticalArrangement = Arrangement.spacedBy(6.dp),
+        modifier = modifier
+            .padding(vertical = if (style.margin > 0) (style.margin / 2).dp else 0.dp)
+            .clip(RoundedCornerShape(cardRadius))
+            .background(parseCmsColor(style.background) ?: Color.White)
+            .border(1.dp, Color(0xFFE6EBF2), RoundedCornerShape(cardRadius)),
     ) {
-        sectionTitle?.let {
-            Text(text = it, fontSize = 14.sp, fontWeight = FontWeight.Bold, color = InkStrong)
+        sectionTitle?.let { title ->
+            Column {
+                Row(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .clickable { expanded = !expanded }
+                        .padding(horizontal = 16.dp, vertical = 14.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(12.dp),
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(RoundedCornerShape(10.dp))
+                            .background(
+                                Brush.linearGradient(listOf(Color(0xFF0F766E), Color(0xFF134E4A))),
+                            ),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.Description,
+                            contentDescription = null,
+                            tint = Color.White,
+                            modifier = Modifier.size(17.dp),
+                        )
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            text = title,
+                            fontSize = 13.5.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = Color(0xFF0F2438),
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                        if (!expanded) {
+                            Text(
+                                text = if (text.length > 60) "${text.take(60)}…" else text,
+                                fontSize = 10.5.sp,
+                                color = Color(0xFF94A3B8),
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(top = 3.dp),
+                            )
+                        }
+                    }
+                    Box(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .graphicsLayer { rotationZ = rotation }
+                            .clip(CircleShape)
+                            .background(if (expanded) Color(0x1A0F766E) else Color(0xFFF1F5F9))
+                            .border(
+                                1.dp,
+                                if (expanded) Color(0x400F766E) else Color(0xFFE2E8F0),
+                                CircleShape,
+                            ),
+                        contentAlignment = Alignment.Center,
+                    ) {
+                        Icon(
+                            imageVector = Icons.Filled.ExpandMore,
+                            contentDescription = null,
+                            tint = if (expanded) Color(0xFF0F766E) else Color(0xFF94A3B8),
+                            modifier = Modifier.size(16.dp),
+                        )
+                    }
+                }
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .height(1.dp)
+                        .background(Color(0xFFEEF2F7)),
+                )
+            }
         }
-        Text(
-            text = text,
-            fontSize = (if (style.fontSize > 0) style.fontSize else 14.0).sp,
-            lineHeight = (if (style.fontSize > 0) style.fontSize * 1.6 else 22.0).sp,
-            fontWeight = FontWeight(style.fontWeight),
-            color = parseCmsColor(style.color) ?: InkBody,
-            textAlign = style.textAlignment(),
-            maxLines = if (truncate > 0 && !expanded) truncate else Int.MAX_VALUE,
-            overflow = TextOverflow.Ellipsis,
-        )
-        if (truncate > 0) {
+
+        AnimatedVisibility(
+            visible = expanded,
+            enter = expandVertically(),
+            exit = shrinkVertically(),
+        ) {
             Text(
-                text = if (expanded) "Show less" else "Read more",
-                fontSize = 13.sp,
-                fontWeight = FontWeight.SemiBold,
-                color = parseCmsColor(style.color) ?: Color(0xFF2563EB),
-                modifier = Modifier.clickable { expanded = !expanded },
+                text = text,
+                fontSize = bodySize,
+                lineHeight = bodySize * 1.7f,
+                fontWeight = FontWeight(style.fontWeight),
+                color = bodyColor,
+                modifier = Modifier.padding(
+                    start = 16.dp,
+                    end = 16.dp,
+                    top = 14.dp,
+                    bottom = 16.dp,
+                ),
             )
         }
     }

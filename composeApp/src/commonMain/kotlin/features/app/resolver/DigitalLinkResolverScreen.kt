@@ -17,6 +17,7 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontWeight
@@ -24,6 +25,7 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import components.resolverComponents.ResolverPalette
+import kotlinx.coroutines.launch
 import resolver.ResolverScreenState
 import resolver.rememberResolverScreenState
 
@@ -40,6 +42,7 @@ fun DigitalLinkResolverScreen(
     modifier: Modifier = Modifier,
 ) {
     val state = rememberResolverScreenState(url)
+    val scope = rememberCoroutineScope()
 
     Box(
         modifier = modifier
@@ -47,6 +50,15 @@ fun DigitalLinkResolverScreen(
             .background(ResolverPalette.PageBackground),
     ) {
         ResolverContent(state)
+        if (state.locationPromptVisible) {
+            LocationPrompt(
+                denied = state.locationDenied,
+                busy = state.isLocationLoading,
+                message = state.locationError,
+                onEnable = { scope.launch { state.retryLocation() } },
+                onDismiss = { state.dismissLocationPrompt() },
+            )
+        }
     }
 }
 

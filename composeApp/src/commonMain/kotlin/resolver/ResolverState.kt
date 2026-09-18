@@ -9,12 +9,18 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import core.network.repository.AppRepository
 import core.network.repository.ResolverRepository
+import core.storage.SessionManager
+import core.storage.getLocalStorage
 import core.util.AuditLogHelper
-import core.util.normalizeGtin
+import features.app.resolver.CmsScanContext
 import features.app.resolver.DefaultResolverTemplateData
+import features.app.resolver.bindProductDetails
 import features.app.resolver.defaultTemplateFromDetails
+import features.app.resolver.scanEventsFromDetails
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -23,12 +29,15 @@ import resolver.cms.cmsArray
 import resolver.cms.cmsBuildProductFallbackPage
 import resolver.cms.cmsDict
 import resolver.cms.cmsDouble
+import resolver.cms.cmsIsAssignedPage
 import resolver.cms.cmsPageMatchesGtin
 import resolver.cms.cmsProductFromConfigData
 import resolver.cms.cmsProductMatchesGtin
 import resolver.cms.cmsRootHasProduct
+import resolver.cms.cmsSimilarProductsFromConfigData
 import resolver.cms.cmsString
 import resolver.cms.enrichCmsRootWithProduct
+import resolver.cms.enrichCmsRootWithSimilar
 import resolver.cms.isAuthenticQuality
 import resolver.cms.parseCmsResponse
 import resolver.distanceKm
@@ -52,7 +61,7 @@ private val EMPTY_JSON = JsonObject(emptyMap())
  * matching the web resolver's independent effects.
  */
 @Stable
-class ResolverScreenState(private val url: String) {
+class ResolverScreenState(private val url: String, private val sessionManager: SessionManager) {
 
     var isLoading by mutableStateOf(true)
         private set
@@ -94,6 +103,19 @@ class ResolverScreenState(private val url: String) {
         private set
     var isLocationLoading by mutableStateOf(false)
         private set
+    var locationSettled by mutableStateOf(false)
+        private set
+    var locationDenied by mutableStateOf(false)
+        private set
+    var locationPromptHidden by mutableStateOf(false)
+        private set
+
+    /** Mirrors the web: the prompt appears once locating has finished but failed. */
+    val locationPromptVisible: Boolean
+        get() = locationSettled && currentLocation == null && !locationPromptHidden
+
+    var scanLogged by mutableStateOf(false)
+        private set
 
     val data: ParsedData? get() = scan?.data
     val gtin: String? get() = scan?.gtin
@@ -115,6 +137,16 @@ class ResolverScreenState(private val url: String) {
             launch { authenticate(parsed) }
             launch { loadCmsPage(parsed) }
             launch { requestLocation() }
+            launch {
+                // Log the scan once authentication and locating have settled,
+                // mirroring the web's independent effect.
+                val deadline = withTimeoutOrNull(12000) {
+                    while ((isAuthLoading && authResult == null) || !locationSettled) {
+                        delay(100)
+                    }
+                }
+                logScan()
+            }
         }
     }
 
@@ -156,8 +188,9 @@ class ResolverScreenState(private val url: String) {
                     val response = parseCmsResponse(raw)
                     root = response.root
                     val pageMatches = cmsPageMatchesGtin(response.page, gtin)
+                    val assignedPage = cmsIsAssignedPage(response.page)
 
-                    if (response.hasPage && !pageMatches) {
+                    if (response.hasPage && !pageMatches && !assignedPage) {
                         if (cmsProductMatchesGtin(response.root, gtin)) {
                             val product = cmsDict(response.root["product"]) ?: EMPTY_JSON
                             pageOk = true
@@ -197,8 +230,12 @@ class ResolverScreenState(private val url: String) {
             if (!cmsRootHasProduct(root) && config != null) {
                 val response = loadProductConfig(config, gtin, batchNumber)
                 val product = cmsProductFromConfigData(response)
+                val similar = cmsSimilarProductsFromConfigData(response)
                 if (product.isNotEmpty()) {
                     cmsRoot = enrichCmsRootWithProduct(cmsRoot, product)
+                }
+                if (similar.isNotEmpty()) {
+                    cmsRoot = enrichCmsRootWithSimilar(cmsRoot, similar)
                 }
             }
             return
@@ -217,11 +254,53 @@ class ResolverScreenState(private val url: String) {
         val cid = companyId?.trim()?.ifEmpty { null }
             ?: AuditLogHelper.companyIdFromBarcode(url)?.toString()
             ?: return
-        val padded = normalizeGtin(gtin).ifBlank { gtin }
         isProductDetailsLoading = true
-        ResolverRepository.fetchProductDetails(padded, cid, batch, serial)
-            .onSuccess { productDetails = it }
+        fetchDetailsWithGtinFallback(gtin, cid, batch, serial)
+            ?.let { productDetails = bindProductDetails(it) }
         isProductDetailsLoading = false
+    }
+
+    /** True when a product-details payload actually carries product data. */
+    private fun hasProductData(result: JsonObject?): Boolean {
+        val dict = result ?: return false
+        if (cmsDict(dict["product"]) != null ||
+            cmsDict(dict["batchDetails"]) != null ||
+            cmsDict(dict["companyDetails"]) != null ||
+            cmsDict(dict["locationDetails"]) != null
+        ) {
+            return true
+        }
+        val data = cmsDict(dict["data"]) ?: return false
+        return cmsDict(data["product"]) != null ||
+            cmsDict(data["batchDetails"]) != null ||
+            cmsDict(data["companyDetails"]) != null ||
+            cmsDict(data["locationDetails"]) != null
+    }
+
+    /**
+     * Retries the product-details lookup with the requested GTIN first, then a
+     * 14-character zero-padded (or trailing-14) candidate, mirroring the web.
+     */
+    private suspend fun fetchDetailsWithGtinFallback(
+        gtin: String,
+        companyId: String?,
+        batch: String?,
+        serial: String?,
+    ): JsonObject? {
+        val cid = companyId?.trim()?.ifEmpty { null } ?: return null
+        val digits = gtin.filter { it.isDigit() }
+        val candidates = mutableListOf(gtin)
+        when {
+            digits.length in 8..13 -> candidates.add(digits.padStart(14, '0'))
+            digits.length > 14 -> candidates.add(digits.takeLast(14))
+        }
+        for (candidate in candidates) {
+            val result = ResolverRepository
+                .fetchProductDetails(candidate, cid, batch, serial)
+                .getOrNull() ?: continue
+            if (hasProductData(result)) return result
+        }
+        return null
     }
 
     private suspend fun loadProductConfig(
@@ -250,6 +329,7 @@ class ResolverScreenState(private val url: String) {
     /** Location powers the diversion check against the invoice address. */
     suspend fun requestLocation() {
         isLocationLoading = true
+        locationDenied = false
         locationError = null
         val coordinates = try {
             DeviceLocationProvider().getCurrentLocation()
@@ -257,7 +337,10 @@ class ResolverScreenState(private val url: String) {
             null
         }
         if (coordinates == null) {
-            locationError = "Unable to fetch location. Check that location access is enabled."
+            locationDenied = locationError == null
+            locationError = locationError
+                ?: "Location access is blocked. Enable it in your settings."
+            locationSettled = true
             isLocationLoading = false
             return
         }
@@ -268,11 +351,97 @@ class ResolverScreenState(private val url: String) {
                     city = details.city.orEmpty(),
                     state = details.state.orEmpty(),
                     country = details.country.orEmpty(),
+                    address = details.address,
+                    postcode = details.postcode.orEmpty(),
                 )
             }
             .onFailure { locationError = "Could not resolve your current address." }
+        locationSettled = true
+        locationDenied = false
         isLocationLoading = false
     }
+
+    /** Re-runs the permission request from the location prompt, mirroring the web retry. */
+    suspend fun retryLocation() {
+        locationPromptHidden = false
+        requestLocation()
+    }
+
+    fun dismissLocationPrompt() {
+        locationPromptHidden = true
+    }
+
+    private val loggedKeys = mutableSetOf<String>()
+
+    /** Mirrors the web `logDigitalLinkScan`: posts a SCAN audit row once per scan. */
+    suspend fun logScan() {
+        val parsed = scan ?: return
+        val gtin = parsed.gtin ?: return
+        if (gtin.isBlank()) return
+        if (scanLogged) return
+        val serial = parsed.data.identifiers.firstOrNull { it.code == "21" }?.value.orEmpty()
+        val batch = parsed.data.identifiers.firstOrNull { it.code == "10" }?.value.orEmpty()
+        val key = "$gtin|$serial|${parsed.cleanUrl}"
+        if (key in loggedKeys) return
+        loggedKeys.add(key)
+
+        try {
+            val geo = currentAddress?.address?.trim()?.takeIf { it.isNotBlank() }
+                ?: listOfNotNull(currentAddress?.city, currentAddress?.state)
+                    .filter { it.isNotBlank() }.joinToString(", ")
+                    .takeIf { it.isNotBlank() }
+                ?: currentLocation?.let { formatCoordinates(it) }
+                ?: "Unknown"
+            val request = AuditLogHelper.buildScanLogRequest(
+                sessionManager = sessionManager,
+                epcId = "",
+                barcodeType = "QR",
+                barcodeData = parsed.cleanUrl,
+                gtin = gtin,
+                serial = serial,
+                batch = batch,
+                isAuthFlow = true,
+                scannedValue = authResult?.quality.orEmpty(),
+                authResultOverride = when (authResult?.quality?.trim()?.lowercase()) {
+                    "real", "original", "authentic" -> "AUTHENTIC"
+                    "fake", "counterfeit" -> "DIVERTED"
+                    else -> "AUTHENTIC"
+                },
+                geoLocationOverride = geo,
+            )
+            val stored = AppRepository.sendScanCreateLog(request).isSuccess
+            if (stored && !parsed.ai97.isNullOrBlank()) {
+                // Mirror the web: after logging, go back to the QA API with the
+                // fully-padded GTIN candidate to surface enriched details.
+                fetchDetailsWithGtinFallback(
+                    gtin = gtin,
+                    companyId = parsed.ai97,
+                    batch = batch,
+                    serial = serial,
+                )?.let { productDetails = bindProductDetails(it) }
+            }
+        } finally {
+            scanLogged = true
+        }
+    }
+
+    /** Live scan context for CMS pack/banner/section widgets, mirroring the web. */
+    val scanContext: CmsScanContext
+        get() = CmsScanContext(
+            expectedLocation = expectedLocationLabel,
+            locationAddress = currentAddress?.address,
+            locationMatched = isLocationMatched,
+            timesScanned = scanTotal,
+            scanEvents = scanEvents,
+            brandName = brandName,
+            gtin = gtin,
+            batchNumber = scanBatch,
+            serialNumber = scanSerial,
+            mfgDate = scanMfg,
+            expiryDate = scanExpiry,
+            locationLabel = locationLabel,
+            companyLabel = brandName,
+        )
 
     // MARK: - Derived product fields
 
@@ -290,9 +459,7 @@ class ResolverScreenState(private val url: String) {
             scanMfg = scanMfg,
             scanExpiry = scanExpiry,
             deviceCity = currentAddress?.city,
-            deviceAddress = currentAddress?.let {
-                listOf(it.city, it.state).filter { part -> part.isNotBlank() }.joinToString(", ")
-            },
+            deviceAddress = currentAddress?.address,
             locationMatched = isLocationMatched,
             expectedLocation = expectedLocationLabel,
             gtin = gtin,
@@ -489,11 +656,18 @@ class ResolverScreenState(private val url: String) {
             }
             return steps
         }
+
+    val scanEvents: List<features.app.resolver.ScanEvent>
+        get() = scanEventsFromDetails(productDetails)
+
+    val scanTotal: Double?
+        get() = cmsDouble(cmsDict(productDetails?.get("scannedDetails"))?.get("total"))
 }
 
 @Composable
 fun rememberResolverScreenState(url: String): ResolverScreenState {
-    val state = remember(url) { ResolverScreenState(url) }
+    val sessionManager = remember { SessionManager(getLocalStorage()) }
+    val state = remember(url) { ResolverScreenState(url, sessionManager) }
     LaunchedEffect(url) { state.load() }
     return state
 }

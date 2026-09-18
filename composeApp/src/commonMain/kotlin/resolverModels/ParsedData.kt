@@ -65,6 +65,9 @@ data class LocationData(
     val city: String,
     val state: String,
     val country: String,
+    /** Full reverse-geocoded street address for display. */
+    val address: String = "",
+    val postcode: String = "",
 )
 
 data class CurrentLocation(

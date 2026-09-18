@@ -168,7 +168,9 @@ object AppRepository {
                 "https://nominatim.openstreetmap.org/reverse" +
                         "?lat=$latitude" +
                         "&lon=$longitude" +
-                        "&format=json"
+                        "&format=json" +
+                        "&addressdetails=1" +
+                        "&zoom=18"
             val response = ApiClient.client.get(fullUrl) {
                 headers {
                     append("User-Agent", "SakkshAsset/1.0 (android; contact@sakksh.com)")
@@ -177,21 +179,35 @@ object AppRepository {
                 }
             }.body<NominatimResponse>()
 
-            val display = response.display_name.trim()
-            val cityValue = response.address.city
-                ?: response.address.town
-                ?: response.address.village
-                ?: response.address.county
-                ?: display.split(",").firstOrNull()?.trim()
+val display = response.display_name.trim()
+                val cityValue = response.address.city
+                    ?: response.address.town
+                    ?: response.address.village
+                    ?: response.address.county
+                    ?: display.split(",").firstOrNull()?.trim()
+                val detailed = listOf(
+                    response.address.amenity ?: response.address.building ?: response.address.shop,
+                    response.address.house_number,
+                    response.address.road,
+                    response.address.neighbourhood ?: response.address.suburb,
+                    cityValue,
+                    response.address.state,
+                    response.address.postcode,
+                )
+                    .filter { part -> !part.isNullOrBlank() }
+                    .distinct()
+                    .joinToString(", ")
 
             val location = LocationDatas(
-                latitude = latitude,
-                longitude = longitude,
-                displayName = display.ifBlank { "Unknown" },
-                city = cityValue,
-                state = response.address.state,
-                country = response.address.country
-            )
+                    latitude = latitude,
+                    longitude = longitude,
+                    displayName = display.ifBlank { "Unknown" },
+                    city = cityValue,
+                    state = response.address.state,
+                    country = response.address.country,
+                    address = detailed.ifBlank { display },
+                    postcode = response.address.postcode,
+                )
 
             Result.success(location)
 

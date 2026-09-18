@@ -157,16 +157,18 @@ object AuditLogHelper {
         authResultOverride: String? = null,
         signature: String? = null,
         companyIdOverride: Int? = null,
+        geoLocationOverride: String? = null,
     ): ScanLogCreateRequest {
         PublicIpCache.ensure()
         val (lat, lon) = AppLocationCache.coordinates()
-        val geo = AppLocationCache.geoLocation.trim().let { label ->
-            if (label.isNotBlank() && !label.equals("Unknown", ignoreCase = true)) {
-                label.take(512)
-            } else {
-                listOf(lat, lon).joinToString(",")
+        val geo = geoLocationOverride?.trim()?.takeIf { it.isNotBlank() }?.take(512)
+            ?: AppLocationCache.geoLocation.trim().let { label ->
+                if (label.isNotBlank() && !label.equals("Unknown", ignoreCase = true)) {
+                    label.take(512)
+                } else {
+                    listOf(lat, lon).joinToString(",")
+                }
             }
-        }
         val fromBarcode = companyIdOverride?.takeIf { it > 0 }
             ?: companyIdFromBarcode(barcodeData, scannedValue, epcId)
         val companyId = fromBarcode

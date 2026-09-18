@@ -51,7 +51,15 @@ data class Address(
     val village: String? = null,
     val state: String? = null,
     val county: String? = null,
-    val country: String? = null
+    val country: String? = null,
+    val road: String? = null,
+    val house_number: String? = null,
+    val neighbourhood: String? = null,
+    val suburb: String? = null,
+    val amenity: String? = null,
+    val building: String? = null,
+    val shop: String? = null,
+    val postcode: String? = null
 ) {
 }
 
@@ -62,7 +70,10 @@ data class LocationDatas(
     val city: String?,
     val displayName: String,
     val state: String?,
-    val country: String?
+    val country: String?,
+    /** Full reverse-geocoded street address for display. */
+    val address: String = "",
+    val postcode: String? = null
 
 )
 

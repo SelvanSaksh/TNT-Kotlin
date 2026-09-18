@@ -62,12 +62,15 @@ import resolver.cms.cmsDouble
 import resolver.cms.cmsLinkURL
 import resolver.cms.cmsMakeURL
 import resolver.cms.cmsProductDisplayName
+import resolver.cms.cmsRealValue
 import resolver.cms.cmsResolve
 import resolver.cms.cmsString
+import resolver.cms.cmsUnwrappedString
 import resolver.cms.isAuthenticQuality
 import resolver.cms.isBanner
 import resolver.cms.isFooter
 import resolver.cms.isImage
+import resolver.cms.isPackCard
 import resolver.cms.isPrice
 import resolver.cms.isTitle
 import resolver.cms.shouldShowComponent
@@ -91,9 +94,32 @@ fun CmsPassportScreen(
     val root = state.cmsRoot
     val accent = parseCmsColor(theme?.primaryColor) ?: DEFAULT_ACCENT
     val isGenuine = state.isReal == true
-    val context = CmsRenderContext(root = root, theme = theme, accent = accent, isGenuine = isGenuine)
+    val context = CmsRenderContext(
+        root = root,
+        theme = theme,
+        accent = accent,
+        isGenuine = isGenuine,
+        isAuthLoading = state.isAuthLoading,
+        authQuality = state.authQuality,
+        scan = state.scanContext,
+    )
 
     val visible = content.components.filter { shouldShowComponent(it, isGenuine) }
+
+    // Pharma-style pages ship the whole screen as widgets (banner + pack card +
+    // section cards), so they render flat instead of inside the passport card.
+    val isSectionPage = visible.any { it.widgetType.isBanner || it.widgetType.isPackCard }
+    if (isSectionPage) {
+        CmsSectionPage(
+            visible = visible,
+            context = context,
+            theme = theme,
+            accent = accent,
+            modifier = modifier,
+        )
+        return
+    }
+
     val imageItems = visible.filter { it.widgetType.isImage }
     val productCard = imageItems.firstOrNull()
     val titleItems = visible.filter { it.widgetType.isTitle }
@@ -135,21 +161,18 @@ fun CmsPassportScreen(
     }?.takeIf { it.isNotBlank() }
         ?: cmsDisplayString(cmsResolve("product.brandName", root)).ifBlank { brandLabel }
 
-    val manufacturer = cmsDisplayString(cmsResolve("product.companyName", root))
-        .ifBlank { headerBrand }
-        .ifBlank { brandLabel }
-        .ifBlank { "the manufacturer" }
+    val manufacturer = cmsRealValue(cmsResolve("product.companyName", root))
+        ?: headerBrand
+        ?: brandLabel
+        ?: "the manufacturer"
     val cmsBannerTitle = cmsBanner?.let {
-        cmsDisplayString(it.prop("title", root)).ifBlank { cmsDisplayString(it.props["title"]) }
+        cmsRealValue(it.prop("title", root)) ?: cmsRealValue(it.props["title"])
     }?.takeIf { it.isNotBlank() }
     val cmsBannerSubtitle = cmsBanner?.let {
-        cmsDisplayString(it.prop("subtitle", root)).ifBlank { cmsDisplayString(it.props["subtitle"]) }
-    }?.takeIf { it.isNotBlank() }
-    val cmsBannerBrand = cmsBanner?.let {
-        cmsDisplayString(it.prop("brand", root)).ifBlank { cmsDisplayString(it.props["brand"]) }
+        cmsRealValue(it.prop("subtitle", root)) ?: cmsRealValue(it.props["subtitle"])
     }?.takeIf { it.isNotBlank() }
     val cmsBannerBadge = cmsBanner?.let {
-        cmsDisplayString(it.prop("badge", root)).ifBlank { cmsDisplayString(it.props["badge"]) }
+        cmsRealValue(it.prop("badge", root)) ?: cmsRealValue(it.props["badge"])
     }?.takeIf { it.isNotBlank() }
 
     val headerPriceSource = productCard ?: priceItems.firstOrNull()
@@ -174,7 +197,6 @@ fun CmsPassportScreen(
                         manufacturer = manufacturer,
                         cmsTitle = cmsBannerTitle,
                         cmsSubtitle = cmsBannerSubtitle,
-                        brandLine = cmsBannerBrand,
                         badge = cmsBannerBadge,
                     )
                     !state.authQuality.isNullOrBlank() -> AuthenticityBarcodeAccordion(
@@ -182,7 +204,6 @@ fun CmsPassportScreen(
                         manufacturer = manufacturer,
                         cmsTitle = cmsBannerTitle,
                         cmsSubtitle = cmsBannerSubtitle,
-                        brandLine = cmsBannerBrand,
                         badge = cmsBannerBadge,
                         gtin = state.gtin
                             ?: cmsDisplayString(cmsResolve("product.identifier", root))
@@ -219,8 +240,12 @@ fun CmsPassportScreen(
                             .padding(horizontal = 14.dp, vertical = 12.dp),
                         verticalArrangement = Arrangement.spacedBy(10.dp),
                     ) {
+                        val fallbackImageUrl = cmsMakeURL(
+                            cmsUnwrappedString(cmsResolve("product.images[0]", root)),
+                        )
                         ProductHeaderRow(
                             headerImage = productCard,
+                            headerImageUrl = fallbackImageUrl,
                             headerTitle = headerTitle,
                             headerBrand = headerBrand,
                             headerPriceSource = headerPriceSource,
@@ -280,6 +305,59 @@ fun CmsPassportScreen(
                         )
                     }
                 }
+
+                PoweredByRatifye(lines = listOf("GS1 Digital Link Standard"))
+            }
+        }
+    }
+}
+
+/**
+ * Pharma-style layout: the whole screen is authored as widgets, so banner,
+ * pack card and the rest render flat in page order.
+ */
+@Composable
+private fun CmsSectionPage(
+    visible: List<ResolverCmsComponent>,
+    context: CmsRenderContext,
+    theme: ResolverCmsTheme?,
+    accent: Color,
+    modifier: Modifier = Modifier,
+) {
+    Box(modifier = modifier.fillMaxSize()) {
+        ThemeBackground(theme = theme, accent = accent)
+
+        Column(
+            modifier = Modifier
+                .fillMaxSize()
+                .verticalScroll(rememberScrollState())
+                .navigationBarsPadding(),
+        ) {
+            visible.forEachIndexed { index, component ->
+                val previous = visible.getOrNull(index - 1)
+                val afterTitle = previous?.widgetType?.isTitle == true
+                val wrapper = when {
+                    component.widgetType.isBanner -> Modifier
+                    component.widgetType.isPackCard -> Modifier
+                        .padding(horizontal = 20.dp)
+                        .offset(y = (-16).dp)
+                    component.widgetType.isTitle -> Modifier
+                        .padding(start = 20.dp, end = 20.dp, top = 20.dp)
+                    afterTitle -> Modifier.padding(horizontal = 20.dp)
+                    else -> Modifier.padding(start = 20.dp, end = 20.dp, top = 16.dp)
+                }
+                CmsComponentView(
+                    component = component,
+                    context = context,
+                    placement = "section",
+                    modifier = wrapper,
+                )
+            }
+
+            Column(
+                modifier = Modifier.padding(start = 20.dp, end = 20.dp, top = 16.dp),
+            ) {
+                PoweredByRatifye(lines = listOf("GS1 Digital Link Standard"))
             }
         }
     }
@@ -327,6 +405,7 @@ private fun ThemeBackground(theme: ResolverCmsTheme?, accent: Color) {
 @Composable
 private fun ProductHeaderRow(
     headerImage: ResolverCmsComponent?,
+    headerImageUrl: String?,
     headerTitle: String,
     headerBrand: String,
     headerPriceSource: ResolverCmsComponent?,
@@ -347,6 +426,28 @@ private fun ProductHeaderRow(
                     thumb = true,
                     linkUrl = productLink,
                 )
+            } else if (headerImageUrl != null) {
+                Box(
+                    modifier = Modifier
+                        .size(96.dp)
+                        .clip(RoundedCornerShape(12.dp))
+                        .background(Color(0xFFF3F4F6))
+                        .then(
+                            if (productLink != null) {
+                                Modifier.clickable { openUrl(productLink) }
+                            } else {
+                                Modifier
+                            },
+                        ),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    AsyncImage(
+                        model = headerImageUrl,
+                        contentDescription = headerTitle,
+                        contentScale = ContentScale.Crop,
+                        modifier = Modifier.fillMaxSize(),
+                    )
+                }
             } else {
                 Box(
                     modifier = Modifier
@@ -473,7 +574,6 @@ private fun AuthenticityBarcodeAccordion(
     manufacturer: String,
     cmsTitle: String?,
     cmsSubtitle: String?,
-    brandLine: String?,
     badge: String?,
     gtin: String?,
     batchNumber: String?,
@@ -507,7 +607,6 @@ private fun AuthenticityBarcodeAccordion(
                 manufacturer = manufacturer,
                 cmsTitle = cmsTitle,
                 cmsSubtitle = cmsSubtitle,
-                brandLine = brandLine,
                 badge = badge,
             )
 

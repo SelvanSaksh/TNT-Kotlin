@@ -66,6 +66,30 @@ data class ScanEvent(
     val flagged: Boolean,
 )
 
+/**
+ * Unwraps a /productmaster/details response to the object that actually carries
+ * the product/batch/company data, mirroring the web `bindProductDetails`.
+ */
+fun bindProductDetails(raw: JsonObject?): JsonObject? {
+    val obj = raw ?: return null
+    if (cmsDict(obj["product"]) != null ||
+        cmsDict(obj["companyDetails"]) != null ||
+        cmsDict(obj["batchDetails"]) != null
+    ) {
+        return obj
+    }
+    val data = cmsDict(obj["data"])
+    if (data != null && (
+            cmsDict(data["product"]) != null ||
+                cmsDict(data["companyDetails"]) != null ||
+                cmsDict(data["batchDetails"]) != null
+            )
+    ) {
+        return data
+    }
+    return data ?: obj
+}
+
 private fun readablePlace(value: JsonElement?): String? {
     val raw = cmsString(value)?.trim()?.takeIf { it.isNotEmpty() } ?: return null
     if (raw.startsWith("urn:", ignoreCase = true)) return null

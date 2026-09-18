@@ -5,6 +5,7 @@ import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import kotlinx.serialization.json.putJsonArray
@@ -65,6 +66,53 @@ fun enrichCmsRootWithProduct(root: JsonObject, product: JsonObject): JsonObject 
                 "product" to product,
                 "exists" to JsonPrimitive(true),
             ),
+        ),
+    )
+}
+
+/**
+ * Maps the `similarProducts` array from a `/productmaster/config` response into a
+ * normalized JSON list mirroring the web resolver's `cmsSimilarProductsFromConfigData`,
+ * so the CMS related-products widget can source live images and prices.
+ */
+fun cmsSimilarProductsFromConfigData(configResponse: JsonElement?): List<JsonObject> {
+    val json = cmsDict(configResponse) ?: return emptyList()
+    val data = cmsDict(json["data"]) ?: json
+    val raw = cmsArray(data["similarProducts"]) ?: return emptyList()
+
+    return raw.mapNotNull { cmsDict(it) }.map { item ->
+        buildJsonObject {
+            cmsDouble(item["productId"])?.let { id ->
+                put("productId", id.toInt())
+            } ?: cmsDouble(item["product_id"])?.let { id -> put("productId", id.toInt()) }
+
+            val name = cmsString(item["productName"]) ?: cmsString(item["product_name"])
+            name?.takeIf { it.isNotEmpty() }?.let { put("productName", it) }
+
+            val brand = cmsString(item["brandName"]) ?: cmsString(item["brand_name"])
+            brand?.takeIf { it.isNotEmpty() }?.let { put("brandName", it) }
+
+            cmsDouble(item["mrp"])?.let { put("mrp", it) }
+                ?: cmsDouble(item["product_mrp"])?.let { put("mrp", it) }
+
+            val gtin = cmsString(item["identifier"]) ?: cmsString(item["gtin"])
+            gtin?.takeIf { it.isNotEmpty() }?.let { put("gtin", it) }
+
+            val images = cmsArray(item["images"]) ?: cmsArray(item["product_images"])
+            if (images != null && images.isNotEmpty()) {
+                put("images", images)
+                cmsString(images.firstOrNull())?.takeIf { it.isNotEmpty() }?.let { put("image", it) }
+            }
+        }.takeIf { it.isNotEmpty() }
+    }.filterNotNull()
+}
+
+/** Injects normalized similar products into the CMS bind root. */
+fun enrichCmsRootWithSimilar(root: JsonObject, similar: List<JsonObject>): JsonObject {
+    if (similar.isEmpty()) return root
+    return JsonObject(
+        root + mapOf(
+            "similarProducts" to buildJsonArray { similar.forEach { add(it) } },
         ),
     )
 }
